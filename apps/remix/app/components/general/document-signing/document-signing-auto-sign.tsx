@@ -155,6 +155,7 @@ export const DocumentSigningAutoSign = ({ recipient, fields }: DocumentSigningAu
     }
 
     await revalidate();
+    setOpen(false);
   };
 
   unsafe_useEffectOnce(() => {
@@ -180,20 +181,29 @@ export const DocumentSigningAutoSign = ({ recipient, fields }: DocumentSigningAu
           </p>
 
           <ul className="mt-4 flex list-inside list-disc flex-col gap-y-0.5">
-            {AUTO_SIGNABLE_FIELD_TYPES.map((fieldType) => (
-              <li key={fieldType}>
-                <Trans>{_(FRIENDLY_FIELD_TYPE[fieldType as FieldType])}</Trans>
-                <span className="pl-2 text-sm">
-                  (
-                  <Plural
-                    value={autoSignableFields.filter((f) => f.type === fieldType).length}
-                    one="1 matching field"
-                    other="# matching fields"
-                  />
-                  )
-                </span>
-              </li>
-            ))}
+            {AUTO_SIGNABLE_FIELD_TYPES.map((fieldType) => {
+              const matchingFieldsCount = autoSignableFields.filter((f) => f.type === fieldType).length;
+              
+              // Only show fields that have matching fields (greater than 0)
+              if (matchingFieldsCount === 0) {
+                return null;
+              }
+              
+              return (
+                <li key={fieldType}>
+                  <Trans>{_(FRIENDLY_FIELD_TYPE[fieldType as FieldType])}</Trans>
+                  <span className="pl-2 text-sm">
+                    (
+                    <Plural
+                      value={matchingFieldsCount}
+                      one="1 matching field"
+                      other="# matching fields"
+                    />
+                    )
+                  </span>
+                </li>
+              );
+            })}
           </ul>
         </div>
 
