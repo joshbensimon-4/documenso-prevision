@@ -10,7 +10,7 @@
     "stop-reminders": "node stop-reminders.js"
   },
   "keywords": ["documenso", "reminders", "automation", "signatures"],
-  "author": "Medibox",
+  "author": "Prevision",
   "license": "MIT",
   "dependencies": {
     "node-cron": "^3.0.3",
