@@ -4,11 +4,11 @@ export type LogoProps = SVGAttributes<SVGSVGElement>;
 
 export const BrandingLogo = ({ ...props }: LogoProps) => {
   return (
-    <svg id="LOGOTYPE" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620.64 156.9">
+    <svg id="LOGOTYPE" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620.64 156.9" {...props}>
       <defs>
         <style>
           {`.cls-1 {
-        fill: #043e99;
+        fill: currentColor;
         stroke-width: 0px;
       }`}
         </style>

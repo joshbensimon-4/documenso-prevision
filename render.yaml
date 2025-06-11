@@ -42,7 +42,10 @@ services:
           type: web
           envVarKey: RENDER_EXTERNAL_URL
       - key: NEXT_PRIVATE_INTERNAL_WEBAPP_URL
-        value: 'http://localhost:10000'
+        fromService:
+          name: documenso-app
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
 
       # SMTP
       - key: NEXT_PRIVATE_SMTP_TRANSPORT

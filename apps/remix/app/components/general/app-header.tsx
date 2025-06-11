@@ -60,9 +60,9 @@ export const Header = ({ className, user, teams, ...props }: HeaderProps) => {
       <div className="mx-auto flex w-full max-w-screen-xl items-center justify-between gap-x-4 px-4 md:justify-normal md:px-8">
         <Link
           to={`${getRootHref(params, { returnEmptyRootString: true })}/documents`}
-          className="focus-visible:ring-ring ring-offset-background hidden rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 md:inline"
+          className="focus-visible:ring-ring ring-offset-background flex rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
         >
-          <BrandingLogo className="h-10 w-auto" />
+          <BrandingLogo className="text-foreground h-8 w-auto md:h-10" />
         </Link>
 
         <AppNavDesktop setIsCommandMenuOpen={setIsCommandMenuOpen} />
