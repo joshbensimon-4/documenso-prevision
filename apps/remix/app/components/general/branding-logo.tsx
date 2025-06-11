@@ -8,7 +8,7 @@ export const BrandingLogo = ({ ...props }: LogoProps) => {
       <defs>
         <style>
           {`.cls-1 {
-        fill: currentColor;
+        fill: #043e99;
         stroke-width: 0px;
       }`}
         </style>
