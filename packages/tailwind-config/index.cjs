@@ -160,6 +160,32 @@ module.exports = {
     require('@tailwindcss/typography'),
     require('@tailwindcss/container-queries'),
     addVariablesForColors,
+    function ({ addUtilities }) {
+      addUtilities({
+        '.text-wrap-aggressive': {
+          'word-wrap': 'normal',
+          'overflow-wrap': 'normal',
+          hyphens: 'none',
+          'white-space': 'normal',
+        },
+        '.text-wrap-field': {
+          'word-wrap': 'normal',
+          'overflow-wrap': 'normal',
+          hyphens: 'none',
+          'white-space': 'normal',
+          'word-break': 'normal',
+        },
+        '.field-text-container': {
+          'word-wrap': 'normal',
+          'overflow-wrap': 'normal',
+          hyphens: 'none',
+          'white-space': 'normal',
+          'line-height': '1.2',
+          'max-width': '100%',
+          'word-break': 'normal',
+        },
+      });
+    },
   ],
 };
 

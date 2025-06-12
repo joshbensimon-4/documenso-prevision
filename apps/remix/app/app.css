@@ -23,6 +23,22 @@
   }
 }
 
+/* Improved text wrapping for document fields */
+.field--FieldRootContainer {
+  word-wrap: normal !important;
+  overflow-wrap: normal !important;
+  hyphens: none !important;
+}
+
+.field--FieldRootContainer p,
+.field--FieldRootContainer div {
+  word-wrap: normal !important;
+  overflow-wrap: normal !important;
+  hyphens: none !important;
+  white-space: normal !important;
+  word-break: normal !important;
+}
+
 /* Remove borders from input fields in the signer UI */
 .field--FieldRootContainer input,
 .field--FieldRootContainer textarea {

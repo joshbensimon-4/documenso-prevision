@@ -151,7 +151,7 @@ export const DocumentSigningDateField = ({
         <div className="flex h-full w-full items-center">
           <p
             className={cn(
-              'text-foreground w-full break-words whitespace-normal text-left text-[clamp(0.425rem,12cqw,0.825rem)] duration-200',
+              'text-foreground text-wrap-field w-full whitespace-normal break-words text-left text-[clamp(0.425rem,12cqw,0.825rem)] duration-200',
               {
                 '!text-center': parsedFieldMeta?.textAlign === 'center',
                 '!text-right': parsedFieldMeta?.textAlign === 'right',

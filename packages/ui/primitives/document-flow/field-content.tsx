@@ -120,7 +120,7 @@ export const FieldContent = ({ field, documentMeta }: FieldIconProps) => {
     !field.inserted
   ) {
     return (
-      <div className="text-field-card-foreground flex flex-row items-center py-0.5 text-[0.5rem] xxs:text-[0.5rem] xs:text-[0.55rem] sm:text-[0.6rem] text-sm">
+      <div className="text-field-card-foreground xxs:text-[0.5rem] xs:text-[0.55rem] flex flex-row items-center py-0.5 text-[0.5rem] text-sm sm:text-[0.6rem]">
         <p>Select</p>
         <ChevronDown className="h-4 w-4" />
       </div>
@@ -173,7 +173,7 @@ export const FieldContent = ({ field, documentMeta }: FieldIconProps) => {
   return (
     <div
       className={cn(
-        'text-field-card-foreground flex h-full w-full items-center justify-center gap-x-1.5 overflow-visible text-center text-[0.5rem] xxs:text-[0.5rem] xs:text-[0.55rem] sm:text-[0.6rem] max-w-full break-words whitespace-normal',
+        'text-field-card-foreground xxs:text-[0.5rem] xs:text-[0.55rem] text-wrap-field flex h-full w-full max-w-full items-center justify-center gap-x-1.5 overflow-visible whitespace-normal break-words text-center text-[0.5rem] sm:text-[0.6rem]',
         {
           // Using justify instead of align because we also vertically center the text.
           'justify-start': field.inserted && !isSignatureField && textAlign === 'left',

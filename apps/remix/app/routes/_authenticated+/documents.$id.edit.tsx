@@ -111,7 +111,7 @@ export default function DocumentEditPage() {
       <div className="mt-4 flex w-full items-end justify-between">
         <div className="flex-1">
           <h1
-            className="block max-w-[20rem] truncate text-2xl font-semibold md:max-w-[30rem] md:text-3xl"
+            className="text-wrap-field block text-2xl font-semibold md:text-3xl"
             title={document.title}
           >
             {document.title}

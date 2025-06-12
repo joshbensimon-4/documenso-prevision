@@ -74,7 +74,7 @@ export const TemplatesTable = ({
         cell: ({ row }) => (
           <Link
             to={formatTemplateLink(row.original)}
-            className="block max-w-[10rem] cursor-pointer truncate font-medium hover:underline md:max-w-[20rem]"
+            className="text-wrap-field block cursor-pointer font-medium hover:underline"
           >
             {row.original.title}
           </Link>

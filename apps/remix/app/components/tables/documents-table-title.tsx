@@ -30,7 +30,7 @@ export const DataTableTitle = ({ row, teamUrl }: DataTableTitleProps) => {
       <Link
         to={`${documentsPath}/${row.id}`}
         title={row.title}
-        className="block max-w-[10rem] truncate font-medium hover:underline md:max-w-[20rem]"
+        className="text-wrap-field block font-medium hover:underline"
       >
         {row.title}
       </Link>
@@ -39,14 +39,12 @@ export const DataTableTitle = ({ row, teamUrl }: DataTableTitleProps) => {
       <Link
         to={`/sign/${recipient?.token}`}
         title={row.title}
-        className="block max-w-[10rem] truncate font-medium hover:underline md:max-w-[20rem]"
+        className="text-wrap-field block font-medium hover:underline"
       >
         {row.title}
       </Link>
     ))
     .otherwise(() => (
-      <span className="block max-w-[10rem] truncate font-medium hover:underline md:max-w-[20rem]">
-        {row.title}
-      </span>
+      <span className="text-wrap-field block font-medium hover:underline">{row.title}</span>
     ));
 };

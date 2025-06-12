@@ -259,7 +259,7 @@ export const DocumentSigningSignatureField = ({
         <div ref={containerRef} className="flex h-full w-full items-center justify-center p-2">
           <p
             ref={signatureRef}
-            className="font-signature text-muted-foreground w-full overflow-hidden break-all text-center leading-tight duration-200"
+            className="font-signature text-muted-foreground text-wrap-field w-full overflow-hidden break-words text-center leading-tight duration-200"
             style={{ fontSize: `${fontSize}rem` }}
           >
             {signature?.typedSignature}

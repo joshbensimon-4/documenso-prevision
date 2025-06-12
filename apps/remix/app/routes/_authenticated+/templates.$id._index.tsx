@@ -109,7 +109,7 @@ export default function TemplatePage() {
       <div className="flex flex-row justify-between truncate">
         <div>
           <h1
-            className="mt-4 block max-w-[20rem] truncate text-2xl font-semibold md:max-w-[30rem] md:text-3xl"
+            className="text-wrap-field mt-4 block text-2xl font-semibold md:text-3xl"
             title={template.title}
           >
             {template.title}
