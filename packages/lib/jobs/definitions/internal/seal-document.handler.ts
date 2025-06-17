@@ -7,7 +7,7 @@ import {
 } from '@prisma/client';
 import { nanoid } from 'nanoid';
 import path from 'node:path';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, PDFFont } from 'pdf-lib';
 
 import { prisma } from '@documenso/prisma';
 import { signPdf } from '@documenso/signing';
@@ -78,7 +78,7 @@ export const run = async ({
   // Seems silly but we need to do this in case the job is re-ran
   // after it has already run through the update task further below.
   // eslint-disable-next-line @typescript-eslint/require-await
-  const documentStatus = await io.runTask('get-document-status', async () => {
+  const _documentStatus = await io.runTask('get-document-status', async () => {
     return document.status;
   });
 
@@ -247,7 +247,7 @@ export const run = async ({
      * Break a long string into multiple lines so it fits within a given width,
      * using natural word breaking similar to word processors.
      */
-    function breakLongString(text: string, maxWidth: number, font: any, fontSize: number): string {
+    function breakLongString(text: string, maxWidth: number, font: PDFFont, fontSize: number): string {
       if (!text) return '';
 
       const lines: string[] = [];

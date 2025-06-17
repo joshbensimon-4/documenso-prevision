@@ -7,7 +7,7 @@ import {
 } from '@prisma/client';
 import { nanoid } from 'nanoid';
 import path from 'node:path';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, PDFFont } from 'pdf-lib';
 
 import PostHogServerClient from '@documenso/lib/server-only/feature-flags/get-post-hog-server-client';
 import { DOCUMENT_AUDIT_LOG_TYPE } from '@documenso/lib/types/document-audit-logs';
@@ -214,7 +214,7 @@ export const sealDocument = async ({
    * Break a long string into multiple lines so it fits within a given width,
    * using natural word breaking similar to word processors.
    */
-  function breakLongString(text: string, maxWidth: number, font: any, fontSize: number): string {
+  function breakLongString(text: string, maxWidth: number, font: PDFFont, fontSize: number): string {
     if (!text) return '';
 
     const lines: string[] = [];
