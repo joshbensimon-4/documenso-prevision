@@ -182,43 +182,139 @@ export const run = async ({
       await addRejectionStampToPdf(pdfDoc, rejectionReason);
     }
 
-    // For non-signature fields, draw them directly on the PDF as text instead of using fields
+        // For non-signature fields, draw them directly on the PDF as text instead of using fields
     for (const field of nonSignatureFields) {
       if (!field.inserted) {
         continue;
       }
-
+      
       const pages = pdfDoc.getPages();
       const page = pages.at(field.page - 1);
-
+      
       if (!page) {
         continue;
       }
-
+      
       const pageWidth = page.getWidth();
       const pageHeight = page.getHeight();
-
+      
       const fieldWidth = pageWidth * (Number(field.width) / 100);
       const fieldHeight = pageHeight * (Number(field.height) / 100);
-
+      
       const fieldX = pageWidth * (Number(field.positionX) / 100);
       const fieldY = pageHeight * (Number(field.positionY) / 100);
-
+      
       // Invert the Y axis since PDFs use a bottom-left coordinate system
       const invertedY = pageHeight - fieldY - fieldHeight;
-
-      // Draw the text directly on the PDF
+      
+      // Draw the text directly on the PDF with word wrapping
       const fontSize = 8; // Set an appropriate font size
       const font = await pdfDoc.embedFont('Helvetica');
+      const padding = 4; // Padding inside the field
 
       if (field.customText) {
-        page.drawText(field.customText, {
-          x: fieldX + 2, // Small padding
-          y: invertedY + fieldHeight / 2 - fontSize / 2, // Center text vertically
-          size: fontSize,
-          font,
-        });
+        // Break text into lines that fit within the field width
+        const availableWidth = fieldWidth - (padding * 2);
+        const wrappedText = breakLongString(field.customText, availableWidth, font, fontSize);
+        const lines = wrappedText.split('\n');
+        
+        // Calculate line height based on font size
+        const lineHeight = fontSize * 1.2; // 20% extra space between lines
+        
+        // Start from the top of the field
+        let currentY = invertedY + fieldHeight - padding - fontSize;
+        
+        // Draw each line
+        for (const line of lines) {
+          // Stop if we've run out of vertical space
+          if (currentY < invertedY + padding) {
+            break;
+          }
+          
+          page.drawText(line, {
+            x: fieldX + padding,
+            y: currentY,
+            size: fontSize,
+            font,
+          });
+          
+          currentY -= lineHeight;
+        }
       }
+    }
+
+    /**
+     * Break a long string into multiple lines so it fits within a given width,
+     * using natural word breaking similar to word processors.
+     */
+    function breakLongString(text: string, maxWidth: number, font: any, fontSize: number): string {
+      if (!text) return '';
+
+      const lines: string[] = [];
+
+      // Process each original line separately to preserve newlines
+      for (const paragraph of text.split('\n')) {
+        // If paragraph fits on one line or is empty, add it as-is
+        if (paragraph === '' || font.widthOfTextAtSize(paragraph, fontSize) <= maxWidth) {
+          lines.push(paragraph);
+          continue;
+        }
+
+        // Split paragraph into words
+        const words = paragraph.split(' ');
+        let currentLine = '';
+
+        for (const word of words) {
+          // Check if adding word to current line would exceed max width
+          const lineWithWord = currentLine.length === 0 ? word : `${currentLine} ${word}`;
+
+          if (font.widthOfTextAtSize(lineWithWord, fontSize) <= maxWidth) {
+            // Word fits, add it to current line
+            currentLine = lineWithWord;
+          } else {
+            // Word doesn't fit on current line
+
+            // First, save current line if it's not empty
+            if (currentLine.length > 0) {
+              lines.push(currentLine);
+              currentLine = '';
+            }
+
+            // Check if word fits on a line by itself
+            if (font.widthOfTextAtSize(word, fontSize) <= maxWidth) {
+              // Word fits on its own line
+              currentLine = word;
+            } else {
+              // Word is too long, need to break it character by character
+              let charLine = '';
+
+              // Process each character in the word
+              for (const char of word) {
+                const nextCharLine = charLine + char;
+
+                if (font.widthOfTextAtSize(nextCharLine, fontSize) <= maxWidth) {
+                  // Character fits, add it
+                  charLine = nextCharLine;
+                } else {
+                  // Character doesn't fit, push current charLine and start a new one
+                  lines.push(charLine);
+                  charLine = char;
+                }
+              }
+
+              // Add any remaining characters as the current line
+              currentLine = charLine;
+            }
+          }
+        }
+
+        // Add the last line if not empty
+        if (currentLine.length > 0) {
+          lines.push(currentLine);
+        }
+      }
+
+      return lines.join('\n');
     }
 
     // If we have signature fields, add the certificate and process the signature fields
