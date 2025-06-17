@@ -175,7 +175,7 @@ export const sealDocument = async ({
     const invertedY = pageHeight - fieldY - fieldHeight;
 
     // Draw the text directly on the PDF
-    const fontSize = 11; // Set an appropriate font size
+    const fontSize = 8; // Set an appropriate font size
     const font = await doc.embedFont('Helvetica');
 
     if (field.customText) {
