@@ -1,4 +1,10 @@
-import { DocumentStatus, FieldType, RecipientRole, SigningStatus, WebhookTriggerEvents } from '@prisma/client';
+import {
+  DocumentStatus,
+  FieldType,
+  RecipientRole,
+  SigningStatus,
+  WebhookTriggerEvents,
+} from '@prisma/client';
 import { nanoid } from 'nanoid';
 import path from 'node:path';
 import { PDFDocument } from 'pdf-lib';
@@ -145,18 +151,18 @@ export const run = async ({
   const pdfData = await getFileServerSide(documentData);
 
   // Separate signature fields from non-signature fields
-  const signatureFields = fields.filter(field => 
-    field.type === FieldType.SIGNATURE || field.type === FieldType.FREE_SIGNATURE
+  const signatureFields = fields.filter(
+    (field) => field.type === FieldType.SIGNATURE || field.type === FieldType.FREE_SIGNATURE,
   );
-  
-  const nonSignatureFields = fields.filter(field => 
-    field.type !== FieldType.SIGNATURE && field.type !== FieldType.FREE_SIGNATURE
+
+  const nonSignatureFields = fields.filter(
+    (field) => field.type !== FieldType.SIGNATURE && field.type !== FieldType.FREE_SIGNATURE,
   );
 
   const hasSignatureField = signatureFields.length > 0;
 
   const certificateData =
-    (hasSignatureField && (document.team?.teamGlobalSettings?.includeSigningCertificate ?? true))
+    hasSignatureField && (document.team?.teamGlobalSettings?.includeSigningCertificate ?? true)
       ? await getCertificatePdf({
           documentId,
           language: document.documentMeta?.language,
@@ -181,34 +187,34 @@ export const run = async ({
       if (!field.inserted) {
         continue;
       }
-      
+
       const pages = pdfDoc.getPages();
       const page = pages.at(field.page - 1);
-      
+
       if (!page) {
         continue;
       }
-      
+
       const pageWidth = page.getWidth();
       const pageHeight = page.getHeight();
-      
+
       const fieldWidth = pageWidth * (Number(field.width) / 100);
       const fieldHeight = pageHeight * (Number(field.height) / 100);
-      
+
       const fieldX = pageWidth * (Number(field.positionX) / 100);
       const fieldY = pageHeight * (Number(field.positionY) / 100);
-      
+
       // Invert the Y axis since PDFs use a bottom-left coordinate system
       const invertedY = pageHeight - fieldY - fieldHeight;
-      
+
       // Draw the text directly on the PDF
-      const fontSize = 11; // Set an appropriate font size
-      const font = await pdfDoc.embedFont("Helvetica");
+      const fontSize = 8; // Set an appropriate font size
+      const font = await pdfDoc.embedFont('Helvetica');
 
       if (field.customText) {
         page.drawText(field.customText, {
           x: fieldX + 2, // Small padding
-          y: invertedY + fieldHeight/2 - fontSize/2, // Center text vertically
+          y: invertedY + fieldHeight / 2 - fontSize / 2, // Center text vertically
           size: fontSize,
           font,
         });
@@ -218,7 +224,7 @@ export const run = async ({
     // If we have signature fields, add the certificate and process the signature fields
     if (hasSignatureField) {
       if (certificateData) {
-        const certificateDoc = await PDFDocument.load(certificateData);
+        const certificateDoc = await PDFDocument.load(Uint8Array.from(certificateData));
         const certificatePages = await pdfDoc.copyPages(
           certificateDoc,
           certificateDoc.getPageIndices(),
@@ -253,7 +259,7 @@ export const run = async ({
     const documentData = await putPdfFileServerSide({
       name: `${name}${suffix}`,
       type: 'application/pdf',
-      arrayBuffer: async () => Promise.resolve(pdfBuffer),
+      arrayBuffer: async () => Promise.resolve(pdfBuffer.buffer as ArrayBuffer),
     });
 
     return documentData.id;
