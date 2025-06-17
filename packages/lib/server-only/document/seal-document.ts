@@ -191,7 +191,7 @@ export const sealDocument = async ({
   // If we have signature fields, add the certificate and process the signature fields
   if (hasSignatureField) {
     if (certificateData) {
-      const certificate = await PDFDocument.load(certificateData);
+      const certificate = await PDFDocument.load(Uint8Array.from(certificateData));
       const certificatePages = await doc.copyPages(certificate, certificate.getPageIndices());
       certificatePages.forEach((page) => {
         doc.addPage(page);
@@ -220,7 +220,7 @@ export const sealDocument = async ({
   const { data: newData } = await putPdfFileServerSide({
     name: `${name}${suffix}`,
     type: 'application/pdf',
-    arrayBuffer: async () => Promise.resolve(pdfBuffer),
+    arrayBuffer: async () => Promise.resolve(pdfBuffer.buffer as ArrayBuffer),
   });
 
   const postHog = PostHogServerClient();
