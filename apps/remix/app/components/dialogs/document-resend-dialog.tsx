@@ -1,18 +1,8 @@
-import { useState } from 'react';
-
-import { zodResolver } from '@hookform/resolvers/zod';
-import { msg } from '@lingui/core/macro';
-import { useLingui } from '@lingui/react';
-import { Trans } from '@lingui/react/macro';
-import { type Recipient, SigningStatus } from '@prisma/client';
-import { History } from 'lucide-react';
-import { useForm } from 'react-hook-form';
-import * as z from 'zod';
-
 import { useSession } from '@documenso/lib/client-only/providers/session';
 import { getRecipientType } from '@documenso/lib/client-only/recipient-type';
-import type { TDocumentMany as TDocumentRow } from '@documenso/lib/types/document';
+import type { TRecipientLite } from '@documenso/lib/types/recipient';
 import { recipientAbbreviation } from '@documenso/lib/utils/recipient-formatter';
+import type { Document } from '@documenso/prisma/types/document-legacy-schema';
 import { trpc as trpcReact } from '@documenso/trpc/react';
 import { cn } from '@documenso/ui/lib/utils';
 import { Button } from '@documenso/ui/primitives/button';
@@ -27,24 +17,31 @@ import {
   DialogTrigger,
 } from '@documenso/ui/primitives/dialog';
 import { DropdownMenuItem } from '@documenso/ui/primitives/dropdown-menu';
-import {
-  Form,
-  FormControl,
-  FormField,
-  FormItem,
-  FormLabel,
-} from '@documenso/ui/primitives/form/form';
+import { Form, FormControl, FormField, FormItem, FormLabel } from '@documenso/ui/primitives/form/form';
 import { useToast } from '@documenso/ui/primitives/use-toast';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { msg } from '@lingui/core/macro';
+import { useLingui } from '@lingui/react';
+import { Trans } from '@lingui/react/macro';
+import { SigningStatus, type Team, type User } from '@prisma/client';
+import { History } from 'lucide-react';
+import { useState } from 'react';
+import { useForm, useWatch } from 'react-hook-form';
+import * as z from 'zod';
 
-import { useOptionalCurrentTeam } from '~/providers/team';
+import { useCurrentTeam } from '~/providers/team';
 
 import { StackAvatar } from '../general/stack-avatar';
 
 const FORM_ID = 'resend-email';
 
 export type DocumentResendDialogProps = {
-  document: TDocumentRow;
-  recipients: Recipient[];
+  document: Pick<Document, 'id' | 'userId' | 'teamId' | 'status'> & {
+    user: Pick<User, 'id' | 'name' | 'email'>;
+    recipients: TRecipientLite[];
+    team: Pick<Team, 'id' | 'url'> | null;
+  };
+  recipients: TRecipientLite[];
 };
 
 export const ZResendDocumentFormSchema = z.object({
@@ -57,7 +54,7 @@ export type TResendDocumentFormSchema = z.infer<typeof ZResendDocumentFormSchema
 
 export const DocumentResendDialog = ({ document, recipients }: DocumentResendDialogProps) => {
   const { user } = useSession();
-  const team = useOptionalCurrentTeam();
+  const team = useCurrentTeam();
 
   const { toast } = useToast();
   const { _ } = useLingui();
@@ -71,7 +68,7 @@ export const DocumentResendDialog = ({ document, recipients }: DocumentResendDia
     document.status !== 'PENDING' ||
     !recipients.some((r) => r.signingStatus === SigningStatus.NOT_SIGNED);
 
-  const { mutateAsync: resendDocument } = trpcReact.document.resendDocument.useMutation();
+  const { mutateAsync: resendDocument } = trpcReact.document.redistribute.useMutation();
 
   const form = useForm<TResendDocumentFormSchema>({
     resolver: zodResolver(ZResendDocumentFormSchema),
@@ -84,6 +81,11 @@ export const DocumentResendDialog = ({ document, recipients }: DocumentResendDia
     handleSubmit,
     formState: { isSubmitting },
   } = form;
+
+  const selectedRecipients = useWatch({
+    control: form.control,
+    name: 'recipients',
+  });
 
   const onFormSubmit = async ({ recipients }: TResendDocumentFormSchema) => {
     try {
@@ -132,10 +134,7 @@ export const DocumentResendDialog = ({ document, recipients }: DocumentResendDia
               render={({ field: { value, onChange } }) => (
                 <>
                   {recipients.map((recipient) => (
-                    <FormItem
-                      key={recipient.id}
-                      className="flex flex-row items-center justify-between gap-x-3"
-                    >
+                    <FormItem key={recipient.id} className="flex flex-row items-center justify-between gap-x-3">
                       <FormLabel
                         className={cn('my-2 flex items-center gap-2 font-normal', {
                           'opacity-50': !value.includes(recipient.id),
@@ -151,7 +150,7 @@ export const DocumentResendDialog = ({ document, recipients }: DocumentResendDia
 
                       <FormControl>
                         <Checkbox
-                          className="h-5 w-5 rounded-full"
+                          className="h-5 w-5 rounded-full border border-neutral-400"
                           value={recipient.id}
                           checked={value.includes(recipient.id)}
                           onCheckedChange={(checked: boolean) =>
@@ -174,7 +173,7 @@ export const DocumentResendDialog = ({ document, recipients }: DocumentResendDia
             <DialogClose asChild>
               <Button
                 type="button"
-                className="dark:bg-muted dark:hover:bg-muted/80 flex-1 bg-black/5 hover:bg-black/10"
+                className="flex-1 bg-black/5 hover:bg-black/10 dark:bg-muted dark:hover:bg-muted/80"
                 variant="secondary"
                 disabled={isSubmitting}
               >
@@ -182,7 +181,13 @@ export const DocumentResendDialog = ({ document, recipients }: DocumentResendDia
               </Button>
             </DialogClose>
 
-            <Button className="flex-1" loading={isSubmitting} type="submit" form={FORM_ID}>
+            <Button
+              className="flex-1"
+              loading={isSubmitting}
+              type="submit"
+              form={FORM_ID}
+              disabled={isSubmitting || selectedRecipients.length === 0}
+            >
               <Trans>Send reminder</Trans>
             </Button>
           </div>

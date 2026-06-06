@@ -1,11 +1,14 @@
 import { prisma } from '@documenso/prisma';
+import { EnvelopeType } from '@prisma/client';
 
 import { AppError, AppErrorCode } from '../../errors/app-error';
+import { mapSecondaryIdToTemplateId } from '../../utils/envelope';
+import { getEnvelopeWhereInput } from '../envelope/get-envelope-by-id';
 
 export type ToggleTemplateDirectLinkOptions = {
   templateId: number;
   userId: number;
-  teamId?: number;
+  teamId: number;
   enabled: boolean;
 };
 
@@ -15,38 +18,31 @@ export const toggleTemplateDirectLink = async ({
   teamId,
   enabled,
 }: ToggleTemplateDirectLinkOptions) => {
-  const template = await prisma.template.findFirst({
-    where: {
+  const { envelopeWhereInput } = await getEnvelopeWhereInput({
+    type: EnvelopeType.TEMPLATE,
+    id: {
+      type: 'templateId',
       id: templateId,
-      ...(teamId
-        ? {
-            team: {
-              id: teamId,
-              members: {
-                some: {
-                  userId,
-                },
-              },
-            },
-          }
-        : {
-            userId,
-            teamId: null,
-          }),
     },
+    userId,
+    teamId,
+  });
+
+  const envelope = await prisma.envelope.findFirst({
+    where: envelopeWhereInput,
     include: {
       recipients: true,
       directLink: true,
     },
   });
 
-  if (!template) {
+  if (!envelope) {
     throw new AppError(AppErrorCode.NOT_FOUND, {
       message: 'Template not found',
     });
   }
 
-  const { directLink } = template;
+  const { directLink } = envelope;
 
   if (!directLink) {
     throw new AppError(AppErrorCode.NOT_FOUND, {
@@ -54,13 +50,23 @@ export const toggleTemplateDirectLink = async ({
     });
   }
 
-  return await prisma.templateDirectLink.update({
+  const updatedDirectLink = await prisma.templateDirectLink.update({
     where: {
       id: directLink.id,
     },
     data: {
-      templateId: template.id,
+      envelopeId: envelope.id,
       enabled,
     },
   });
+
+  return {
+    id: updatedDirectLink.id,
+    token: updatedDirectLink.token,
+    createdAt: updatedDirectLink.createdAt,
+    enabled: updatedDirectLink.enabled,
+    directTemplateRecipientId: updatedDirectLink.directTemplateRecipientId,
+    templateId: mapSecondaryIdToTemplateId(envelope.secondaryId),
+    envelopeId: envelope.id,
+  };
 };

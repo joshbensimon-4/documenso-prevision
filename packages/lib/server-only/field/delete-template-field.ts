@@ -1,48 +1,48 @@
 import { prisma } from '@documenso/prisma';
+import { EnvelopeType } from '@prisma/client';
 
 import { AppError, AppErrorCode } from '../../errors/app-error';
+import { buildTeamWhereQuery } from '../../utils/teams';
+import { getEnvelopeWhereInput } from '../envelope/get-envelope-by-id';
 
 export interface DeleteTemplateFieldOptions {
   userId: number;
-  teamId?: number;
+  teamId: number;
   fieldId: number;
 }
 
-export const deleteTemplateField = async ({
-  userId,
-  teamId,
-  fieldId,
-}: DeleteTemplateFieldOptions): Promise<void> => {
+export const deleteTemplateField = async ({ userId, teamId, fieldId }: DeleteTemplateFieldOptions): Promise<void> => {
   const field = await prisma.field.findFirst({
     where: {
       id: fieldId,
-      template: teamId
-        ? {
-            team: {
-              id: teamId,
-              members: {
-                some: {
-                  userId,
-                },
-              },
-            },
-          }
-        : {
-            userId,
-            teamId: null,
-          },
+      envelope: {
+        type: EnvelopeType.TEMPLATE,
+        team: buildTeamWhereQuery({ teamId, userId }),
+      },
     },
   });
 
-  if (!field || !field.templateId) {
+  if (!field) {
     throw new AppError(AppErrorCode.NOT_FOUND, {
       message: 'Field not found',
     });
   }
 
+  // Additional validation to check visibility.
+  const { envelopeWhereInput } = await getEnvelopeWhereInput({
+    id: {
+      type: 'envelopeId',
+      id: field.envelopeId,
+    },
+    type: EnvelopeType.TEMPLATE,
+    userId,
+    teamId,
+  });
+
   await prisma.field.delete({
     where: {
-      id: fieldId,
+      id: field.id,
+      envelope: envelopeWhereInput,
     },
   });
 };

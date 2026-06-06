@@ -1,15 +1,5 @@
-import { useState } from 'react';
-
-import { zodResolver } from '@hookform/resolvers/zod';
-import { msg } from '@lingui/core/macro';
-import { useLingui } from '@lingui/react';
-import { Trans } from '@lingui/react/macro';
-import type * as DialogPrimitive from '@radix-ui/react-dialog';
-import { useForm } from 'react-hook-form';
-import type { z } from 'zod';
-
 import { trpc } from '@documenso/trpc/react';
-import { ZCreateWebhookMutationSchema } from '@documenso/trpc/server/webhook-router/schema';
+import { ZCreateWebhookRequestSchema } from '@documenso/trpc/server/webhook-router/schema';
 import { Button } from '@documenso/ui/primitives/button';
 import {
   Dialog,
@@ -33,12 +23,20 @@ import { Input } from '@documenso/ui/primitives/input';
 import { PasswordInput } from '@documenso/ui/primitives/password-input';
 import { Switch } from '@documenso/ui/primitives/switch';
 import { useToast } from '@documenso/ui/primitives/use-toast';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { msg } from '@lingui/core/macro';
+import { useLingui } from '@lingui/react';
+import { Trans } from '@lingui/react/macro';
+import type * as DialogPrimitive from '@radix-ui/react-dialog';
+import { useState } from 'react';
+import { useForm } from 'react-hook-form';
+import type { z } from 'zod';
 
-import { useOptionalCurrentTeam } from '~/providers/team';
+import { useCurrentTeam } from '~/providers/team';
 
 import { WebhookMultiSelectCombobox } from '../general/webhook-multiselect-combobox';
 
-const ZCreateWebhookFormSchema = ZCreateWebhookMutationSchema.omit({ teamId: true });
+const ZCreateWebhookFormSchema = ZCreateWebhookRequestSchema;
 
 type TCreateWebhookFormSchema = z.infer<typeof ZCreateWebhookFormSchema>;
 
@@ -50,7 +48,7 @@ export const WebhookCreateDialog = ({ trigger, ...props }: WebhookCreateDialogPr
   const { _ } = useLingui();
   const { toast } = useToast();
 
-  const team = useOptionalCurrentTeam();
+  const team = useCurrentTeam();
 
   const [open, setOpen] = useState(false);
 
@@ -66,19 +64,13 @@ export const WebhookCreateDialog = ({ trigger, ...props }: WebhookCreateDialogPr
 
   const { mutateAsync: createWebhook } = trpc.webhook.createWebhook.useMutation();
 
-  const onSubmit = async ({
-    enabled,
-    eventTriggers,
-    secret,
-    webhookUrl,
-  }: TCreateWebhookFormSchema) => {
+  const onSubmit = async ({ enabled, eventTriggers, secret, webhookUrl }: TCreateWebhookFormSchema) => {
     try {
       await createWebhook({
         enabled,
         eventTriggers,
         secret,
         webhookUrl,
-        teamId: team?.id,
       });
 
       setOpen(false);
@@ -99,11 +91,7 @@ export const WebhookCreateDialog = ({ trigger, ...props }: WebhookCreateDialogPr
   };
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(value) => !form.formState.isSubmitting && setOpen(value)}
-      {...props}
-    >
+    <Dialog open={open} onOpenChange={(value) => !form.formState.isSubmitting && setOpen(value)} {...props}>
       <DialogTrigger onClick={(e) => e.stopPropagation()} asChild>
         {trigger ?? (
           <Button className="flex-shrink-0">
@@ -124,10 +112,7 @@ export const WebhookCreateDialog = ({ trigger, ...props }: WebhookCreateDialogPr
 
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)}>
-            <fieldset
-              className="flex h-full flex-col space-y-4"
-              disabled={form.formState.isSubmitting}
-            >
+            <fieldset className="flex h-full flex-col space-y-4" disabled={form.formState.isSubmitting}>
               <div className="flex flex-col-reverse gap-4 md:flex-row">
                 <FormField
                   control={form.control}
@@ -161,11 +146,7 @@ export const WebhookCreateDialog = ({ trigger, ...props }: WebhookCreateDialogPr
 
                       <div>
                         <FormControl>
-                          <Switch
-                            className="bg-background"
-                            checked={field.value}
-                            onCheckedChange={field.onChange}
-                          />
+                          <Switch className="bg-background" checked={field.value} onCheckedChange={field.onChange} />
                         </FormControl>
                       </div>
 
@@ -210,19 +191,14 @@ export const WebhookCreateDialog = ({ trigger, ...props }: WebhookCreateDialogPr
                       <Trans>Secret</Trans>
                     </FormLabel>
                     <FormControl>
-                      <PasswordInput
-                        className="bg-background"
-                        {...field}
-                        value={field.value ?? ''}
-                      />
+                      <PasswordInput className="bg-background" {...field} value={field.value ?? ''} />
                     </FormControl>
 
                     <FormDescription>
                       <Trans>
-                        A secret that will be sent to your URL so you can verify that the request
-                        has been sent by Documenso
+                        A secret that will be sent to your URL so you can verify that the request has been sent by
+                        Documenso.
                       </Trans>
-                      .
                     </FormDescription>
                     <FormMessage />
                   </FormItem>

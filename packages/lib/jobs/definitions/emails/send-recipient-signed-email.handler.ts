@@ -1,32 +1,32 @@
-import { createElement } from 'react';
-
-import { msg } from '@lingui/core/macro';
-
 import { mailer } from '@documenso/email/mailer';
 import { DocumentRecipientSignedEmailTemplate } from '@documenso/email/templates/document-recipient-signed';
 import { prisma } from '@documenso/prisma';
+import { msg } from '@lingui/core/macro';
+import { EnvelopeType } from '@prisma/client';
+import { createElement } from 'react';
 
 import { getI18nInstance } from '../../../client-only/providers/i18n-server';
 import { NEXT_PUBLIC_WEBAPP_URL } from '../../../constants/app';
-import { FROM_ADDRESS, FROM_NAME } from '../../../constants/email';
+import { getEmailContext } from '../../../server-only/email/get-email-context';
 import { extractDerivedDocumentEmailSettings } from '../../../types/document-email';
+import { unsafeBuildEnvelopeIdQuery } from '../../../utils/envelope';
+import { isRecipientEmailValidForSending } from '../../../utils/recipients';
 import { renderEmailWithI18N } from '../../../utils/render-email-with-i18n';
-import { teamGlobalSettingsToBranding } from '../../../utils/team-global-settings-to-branding';
 import type { JobRunIO } from '../../client/_internal/job';
 import type { TSendRecipientSignedEmailJobDefinition } from './send-recipient-signed-email';
 
-export const run = async ({
-  payload,
-  io,
-}: {
-  payload: TSendRecipientSignedEmailJobDefinition;
-  io: JobRunIO;
-}) => {
+export const run = async ({ payload, io }: { payload: TSendRecipientSignedEmailJobDefinition; io: JobRunIO }) => {
   const { documentId, recipientId } = payload;
 
-  const document = await prisma.document.findFirst({
+  const envelope = await prisma.envelope.findFirst({
     where: {
-      id: documentId,
+      ...unsafeBuildEnvelopeIdQuery(
+        {
+          type: 'documentId',
+          id: documentId,
+        },
+        EnvelopeType.DOCUMENT,
+      ),
       recipients: {
         some: {
           id: recipientId,
@@ -39,62 +39,67 @@ export const run = async ({
           id: recipientId,
         },
       },
-      user: true,
-      documentMeta: true,
-      team: {
-        include: {
-          teamGlobalSettings: true,
+      user: {
+        select: {
+          id: true,
+          email: true,
+          name: true,
         },
       },
+      documentMeta: true,
     },
   });
 
-  if (!document) {
+  if (!envelope) {
     throw new Error('Document not found');
   }
 
-  if (document.recipients.length === 0) {
+  if (envelope.recipients.length === 0) {
     throw new Error('Document has no recipients');
   }
 
-  const isRecipientSignedEmailEnabled = extractDerivedDocumentEmailSettings(
-    document.documentMeta,
-  ).recipientSigned;
+  const isRecipientSignedEmailEnabled = extractDerivedDocumentEmailSettings(envelope.documentMeta).recipientSigned;
 
   if (!isRecipientSignedEmailEnabled) {
     return;
   }
 
-  const [recipient] = document.recipients;
+  const [recipient] = envelope.recipients;
   const { email: recipientEmail, name: recipientName } = recipient;
-  const { user: owner } = document;
+  const { user: owner } = envelope;
 
   const recipientReference = recipientName || recipientEmail;
 
-  // Don't send notification if the owner is the one who signed
-  if (owner.email === recipientEmail) {
+  // Don't send notification if the owner is the one who signed.
+  if (owner.email === recipientEmail || !isRecipientEmailValidForSending(recipient)) {
     return;
   }
 
+  const { branding, emailLanguage, senderEmail } = await getEmailContext({
+    emailType: 'INTERNAL',
+    source: {
+      type: 'team',
+      teamId: envelope.teamId,
+    },
+    meta: envelope.documentMeta,
+  });
+
   const assetBaseUrl = NEXT_PUBLIC_WEBAPP_URL() || 'http://localhost:3000';
-  const i18n = await getI18nInstance(document.documentMeta?.language);
+
+  const i18n = await getI18nInstance(emailLanguage);
 
   const template = createElement(DocumentRecipientSignedEmailTemplate, {
-    documentName: document.title,
+    documentName: envelope.title,
     recipientName,
     recipientEmail,
     assetBaseUrl,
   });
 
   await io.runTask('send-recipient-signed-email', async () => {
-    const branding = document.team?.teamGlobalSettings
-      ? teamGlobalSettingsToBranding(document.team.teamGlobalSettings)
-      : undefined;
-
     const [html, text] = await Promise.all([
-      renderEmailWithI18N(template, { lang: document.documentMeta?.language, branding }),
+      renderEmailWithI18N(template, { lang: emailLanguage, branding }),
       renderEmailWithI18N(template, {
-        lang: document.documentMeta?.language,
+        lang: emailLanguage,
         branding,
         plainText: true,
       }),
@@ -105,11 +110,8 @@ export const run = async ({
         name: owner.name ?? '',
         address: owner.email,
       },
-      from: {
-        name: FROM_NAME,
-        address: FROM_ADDRESS,
-      },
-      subject: i18n._(msg`${recipientReference} has signed "${document.title}"`),
+      from: senderEmail,
+      subject: i18n._(msg`${recipientReference} has signed "${envelope.title}"`),
       html,
       text,
     });

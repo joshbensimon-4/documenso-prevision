@@ -1,14 +1,15 @@
-import { msg } from '@lingui/core/macro';
-import { useLingui } from '@lingui/react';
-import { Trans } from '@lingui/react/macro';
-import type { DocumentStatus } from '@prisma/client';
-import { DownloadIcon } from 'lucide-react';
-
+import { downloadFile } from '@documenso/lib/client-only/download-file';
+import { base64 } from '@documenso/lib/universal/base64';
 import { isDocumentCompleted } from '@documenso/lib/utils/document';
 import { trpc } from '@documenso/trpc/react';
 import { cn } from '@documenso/ui/lib/utils';
 import { Button } from '@documenso/ui/primitives/button';
 import { useToast } from '@documenso/ui/primitives/use-toast';
+import { msg } from '@lingui/core/macro';
+import { useLingui } from '@lingui/react';
+import { Trans } from '@lingui/react/macro';
+import type { DocumentStatus } from '@prisma/client';
+import { DownloadIcon } from 'lucide-react';
 
 export type DocumentCertificateDownloadButtonProps = {
   className?: string;
@@ -24,49 +25,25 @@ export const DocumentCertificateDownloadButton = ({
   const { toast } = useToast();
   const { _ } = useLingui();
 
-  const { mutateAsync: downloadCertificate, isPending } =
-    trpc.document.downloadCertificate.useMutation();
+  const { mutateAsync: downloadCertificate, isPending } = trpc.document.downloadCertificate.useMutation();
 
   const onDownloadCertificatesClick = async () => {
     try {
-      const { url } = await downloadCertificate({ documentId });
+      const { data, envelopeTitle } = await downloadCertificate({ documentId });
 
-      const iframe = Object.assign(document.createElement('iframe'), {
-        src: url,
+      const buffer = new Uint8Array(base64.decode(data));
+      const blob = new Blob([buffer], { type: 'application/pdf' });
+
+      downloadFile({
+        data: blob,
+        filename: `${envelopeTitle} - Certificate.pdf`,
       });
-
-      Object.assign(iframe.style, {
-        position: 'fixed',
-        top: '0',
-        left: '0',
-        width: '0',
-        height: '0',
-      });
-
-      const onLoaded = () => {
-        if (iframe.contentDocument?.readyState === 'complete') {
-          iframe.contentWindow?.print();
-
-          iframe.contentWindow?.addEventListener('afterprint', () => {
-            document.body.removeChild(iframe);
-          });
-        }
-      };
-
-      // When the iframe has loaded, print the iframe and remove it from the dom
-      iframe.addEventListener('load', onLoaded);
-
-      document.body.appendChild(iframe);
-
-      onLoaded();
     } catch (error) {
       console.error(error);
 
       toast({
         title: _(msg`Something went wrong`),
-        description: _(
-          msg`Sorry, we were unable to download the certificate. Please try again later.`,
-        ),
+        description: _(msg`Sorry, we were unable to download the certificate. Please try again later.`),
         variant: 'destructive',
       });
     }

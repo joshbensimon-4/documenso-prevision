@@ -1,40 +1,46 @@
+import { isPrivateUrl } from '@documenso/lib/server-only/webhooks/is-private-url';
 import { WebhookTriggerEvents } from '@prisma/client';
 import { z } from 'zod';
 
-export const ZGetTeamWebhooksQuerySchema = z.object({
-  teamId: z.number(),
-});
+export const ZWebhookUrlSchema = z
+  .string()
+  .url()
+  .refine((url) => !isPrivateUrl(url), {
+    message: 'Webhook URL cannot point to a private or loopback address',
+  });
 
-export type TGetTeamWebhooksQuerySchema = z.infer<typeof ZGetTeamWebhooksQuerySchema>;
-
-export const ZCreateWebhookMutationSchema = z.object({
-  webhookUrl: z.string().url(),
+export const ZCreateWebhookRequestSchema = z.object({
+  webhookUrl: ZWebhookUrlSchema,
   eventTriggers: z
     .array(z.nativeEnum(WebhookTriggerEvents))
     .min(1, { message: 'At least one event trigger is required' }),
   secret: z.string().nullable(),
   enabled: z.boolean(),
-  teamId: z.number().optional(),
 });
 
-export type TCreateWebhookFormSchema = z.infer<typeof ZCreateWebhookMutationSchema>;
+export type TCreateWebhookFormSchema = z.infer<typeof ZCreateWebhookRequestSchema>;
 
-export const ZGetWebhookByIdQuerySchema = z.object({
-  id: z.string(),
-  teamId: z.number().optional(),
-});
-
-export type TGetWebhookByIdQuerySchema = z.infer<typeof ZGetWebhookByIdQuerySchema>;
-
-export const ZEditWebhookMutationSchema = ZCreateWebhookMutationSchema.extend({
+export const ZGetWebhookByIdRequestSchema = z.object({
   id: z.string(),
 });
 
-export type TEditWebhookMutationSchema = z.infer<typeof ZEditWebhookMutationSchema>;
+export type TGetWebhookByIdRequestSchema = z.infer<typeof ZGetWebhookByIdRequestSchema>;
 
-export const ZDeleteWebhookMutationSchema = z.object({
+export const ZEditWebhookRequestSchema = ZCreateWebhookRequestSchema.extend({
   id: z.string(),
-  teamId: z.number().optional(),
 });
 
-export type TDeleteWebhookMutationSchema = z.infer<typeof ZDeleteWebhookMutationSchema>;
+export type TEditWebhookRequestSchema = z.infer<typeof ZEditWebhookRequestSchema>;
+
+export const ZDeleteWebhookRequestSchema = z.object({
+  id: z.string(),
+});
+
+export type TDeleteWebhookRequestSchema = z.infer<typeof ZDeleteWebhookRequestSchema>;
+
+export const ZTriggerTestWebhookRequestSchema = z.object({
+  id: z.string(),
+  event: z.nativeEnum(WebhookTriggerEvents),
+});
+
+export type TTriggerTestWebhookRequestSchema = z.infer<typeof ZTriggerTestWebhookRequestSchema>;

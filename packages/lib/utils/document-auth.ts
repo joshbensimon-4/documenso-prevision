@@ -1,4 +1,4 @@
-import type { Document, Recipient } from '@prisma/client';
+import type { Envelope, Recipient } from '@prisma/client';
 
 import type {
   TDocumentAuthOptions,
@@ -6,11 +6,10 @@ import type {
   TRecipientActionAuthTypes,
   TRecipientAuthOptions,
 } from '../types/document-auth';
-import { DocumentAuth } from '../types/document-auth';
-import { ZDocumentAuthOptionsSchema, ZRecipientAuthOptionsSchema } from '../types/document-auth';
+import { DocumentAuth, ZDocumentAuthOptionsSchema, ZRecipientAuthOptionsSchema } from '../types/document-auth';
 
 type ExtractDocumentAuthMethodsOptions = {
-  documentAuth: Document['authOptions'];
+  documentAuth: Envelope['authOptions'];
   recipientAuth?: Recipient['authOptions'];
 };
 
@@ -20,24 +19,20 @@ type ExtractDocumentAuthMethodsOptions = {
  * Will combine the recipient and document auth values to derive the final
  * auth values for a recipient if possible.
  */
-export const extractDocumentAuthMethods = ({
-  documentAuth,
-  recipientAuth,
-}: ExtractDocumentAuthMethodsOptions) => {
+export const extractDocumentAuthMethods = ({ documentAuth, recipientAuth }: ExtractDocumentAuthMethodsOptions) => {
   const documentAuthOption = ZDocumentAuthOptionsSchema.parse(documentAuth);
   const recipientAuthOption = ZRecipientAuthOptionsSchema.parse(recipientAuth);
 
-  const derivedRecipientAccessAuth: TRecipientAccessAuthTypes | null =
-    recipientAuthOption.accessAuth || documentAuthOption.globalAccessAuth;
+  const derivedRecipientAccessAuth: TRecipientAccessAuthTypes[] =
+    recipientAuthOption.accessAuth.length > 0 ? recipientAuthOption.accessAuth : documentAuthOption.globalAccessAuth;
 
-  const derivedRecipientActionAuth: TRecipientActionAuthTypes | null =
-    recipientAuthOption.actionAuth || documentAuthOption.globalActionAuth;
+  const derivedRecipientActionAuth: TRecipientActionAuthTypes[] =
+    recipientAuthOption.actionAuth.length > 0 ? recipientAuthOption.actionAuth : documentAuthOption.globalActionAuth;
 
-  const recipientAccessAuthRequired = derivedRecipientAccessAuth !== null;
+  const recipientAccessAuthRequired = derivedRecipientAccessAuth.length > 0;
 
   const recipientActionAuthRequired =
-    derivedRecipientActionAuth !== DocumentAuth.EXPLICIT_NONE &&
-    derivedRecipientActionAuth !== null;
+    derivedRecipientActionAuth.length > 0 && !derivedRecipientActionAuth.includes(DocumentAuth.EXPLICIT_NONE);
 
   return {
     derivedRecipientAccessAuth,
@@ -54,19 +49,17 @@ export const extractDocumentAuthMethods = ({
  */
 export const createDocumentAuthOptions = (options: TDocumentAuthOptions): TDocumentAuthOptions => {
   return {
-    globalAccessAuth: options?.globalAccessAuth ?? null,
-    globalActionAuth: options?.globalActionAuth ?? null,
+    globalAccessAuth: options?.globalAccessAuth ?? [],
+    globalActionAuth: options?.globalActionAuth ?? [],
   };
 };
 
 /**
  * Create recipient auth options in a type safe way.
  */
-export const createRecipientAuthOptions = (
-  options: TRecipientAuthOptions,
-): TRecipientAuthOptions => {
+export const createRecipientAuthOptions = (options: TRecipientAuthOptions): TRecipientAuthOptions => {
   return {
-    accessAuth: options?.accessAuth ?? null,
-    actionAuth: options?.actionAuth ?? null,
+    accessAuth: options?.accessAuth ?? [],
+    actionAuth: options?.actionAuth ?? [],
   };
 };

@@ -1,11 +1,3 @@
-import { useEffect, useMemo, useState, useTransition } from 'react';
-
-import { msg } from '@lingui/core/macro';
-import { useLingui } from '@lingui/react';
-import type { Document, Role, Subscription } from '@prisma/client';
-import { Edit, Loader } from 'lucide-react';
-import { Link } from 'react-router';
-
 import { useDebouncedValue } from '@documenso/lib/client-only/hooks/use-debounced-value';
 import { useUpdateSearchParams } from '@documenso/lib/client-only/hooks/use-update-search-params';
 import { Button } from '@documenso/ui/primitives/button';
@@ -13,6 +5,13 @@ import type { DataTableColumnDef } from '@documenso/ui/primitives/data-table';
 import { DataTable } from '@documenso/ui/primitives/data-table';
 import { DataTablePagination } from '@documenso/ui/primitives/data-table-pagination';
 import { Input } from '@documenso/ui/primitives/input';
+import { msg } from '@lingui/core/macro';
+import { useLingui } from '@lingui/react';
+import { Trans } from '@lingui/react/macro';
+import type { Role, Subscription } from '@prisma/client';
+import { Edit, Loader } from 'lucide-react';
+import { useEffect, useMemo, useState, useTransition } from 'react';
+import { Link } from 'react-router';
 
 type UserData = {
   id: number;
@@ -20,31 +19,19 @@ type UserData = {
   email: string;
   roles: Role[];
   subscriptions?: SubscriptionLite[] | null;
-  documents: DocumentLite[];
+  documentCount: number;
 };
 
-type SubscriptionLite = Pick<
-  Subscription,
-  'id' | 'status' | 'planId' | 'priceId' | 'createdAt' | 'periodEnd'
->;
-
-type DocumentLite = Pick<Document, 'id'>;
+type SubscriptionLite = Pick<Subscription, 'id' | 'status' | 'planId' | 'priceId' | 'createdAt' | 'periodEnd'>;
 
 type AdminDashboardUsersTableProps = {
   users: UserData[];
   totalPages: number;
   perPage: number;
   page: number;
-  individualPriceIds: string[];
 };
 
-export const AdminDashboardUsersTable = ({
-  users,
-  totalPages,
-  perPage,
-  page,
-  individualPriceIds,
-}: AdminDashboardUsersTableProps) => {
+export const AdminDashboardUsersTable = ({ users, totalPages, perPage, page }: AdminDashboardUsersTableProps) => {
   const { _ } = useLingui();
 
   const [isPending, startTransition] = useTransition();
@@ -55,7 +42,7 @@ export const AdminDashboardUsersTable = ({
   const columns = useMemo(() => {
     return [
       {
-        header: 'ID',
+        header: _(msg`ID`),
         accessorKey: 'id',
         cell: ({ row }) => <div>{row.original.id}</div>,
       },
@@ -75,22 +62,8 @@ export const AdminDashboardUsersTable = ({
         cell: ({ row }) => row.original.roles.join(', '),
       },
       {
-        header: _(msg`Subscription`),
-        accessorKey: 'subscription',
-        cell: ({ row }) => {
-          const foundIndividualSubscription = (row.original.subscriptions ?? []).find((sub) =>
-            individualPriceIds.includes(sub.priceId),
-          );
-
-          return foundIndividualSubscription?.status ?? 'NONE';
-        },
-      },
-      {
         header: _(msg`Documents`),
-        accessorKey: 'documents',
-        cell: ({ row }) => {
-          return <div>{row.original.documents?.length}</div>;
-        },
+        accessorKey: 'documentCount',
       },
       {
         header: '',
@@ -99,15 +72,15 @@ export const AdminDashboardUsersTable = ({
           return (
             <Button className="w-24" asChild>
               <Link to={`/admin/users/${row.original.id}`}>
-                <Edit className="-ml-1 mr-2 h-4 w-4" />
-                Edit
+                <Edit className="mr-2 -ml-1 h-4 w-4" />
+                <Trans>Edit</Trans>
               </Link>
             </Button>
           );
         },
       },
     ] satisfies DataTableColumnDef<(typeof users)[number]>[];
-  }, [individualPriceIds]);
+  }, []);
 
   useEffect(() => {
     startTransition(() => {

@@ -1,14 +1,11 @@
-import { useLingui } from '@lingui/react';
-import type { DocumentMeta, Signature, TemplateMeta } from '@prisma/client';
-import { FieldType } from '@prisma/client';
-import { ChevronDown } from 'lucide-react';
-
-import {
-  DEFAULT_DOCUMENT_DATE_FORMAT,
-  convertToLocalSystemFormat,
-} from '@documenso/lib/constants/date-formats';
+import { convertToLocalSystemFormat, DEFAULT_DOCUMENT_DATE_FORMAT } from '@documenso/lib/constants/date-formats';
 import type { TFieldMetaSchema } from '@documenso/lib/types/field-meta';
 import { fromCheckboxValue } from '@documenso/lib/universal/field-checkbox';
+import { useLingui } from '@lingui/react';
+import { Trans } from '@lingui/react/macro';
+import type { DocumentMeta, Signature } from '@prisma/client';
+import { FieldType } from '@prisma/client';
+import { ChevronDown } from 'lucide-react';
 
 import { cn } from '../../lib/utils';
 import { Checkbox } from '../checkbox';
@@ -27,7 +24,7 @@ type FieldIconProps = {
     fieldMeta?: TFieldMetaSchema | null;
     signature?: Signature | null;
   };
-  documentMeta?: DocumentMeta | TemplateMeta;
+  documentMeta?: Pick<DocumentMeta, 'dateFormat'>;
 };
 
 /**
@@ -38,13 +35,8 @@ export const FieldContent = ({ field, documentMeta }: FieldIconProps) => {
 
   const { type, fieldMeta } = field;
 
-  // Only render checkbox if values exist, otherwise render the empty checkbox field content.
-  if (
-    field.type === FieldType.CHECKBOX &&
-    field.fieldMeta?.type === 'checkbox' &&
-    field.fieldMeta.values &&
-    field.fieldMeta.values.length > 0
-  ) {
+  // Render checkbox layout for checkbox fields, even if no values exist yet
+  if (field.type === FieldType.CHECKBOX && field.fieldMeta?.type === 'checkbox') {
     let checkedValues: string[] = [];
 
     try {
@@ -55,8 +47,32 @@ export const FieldContent = ({ field, documentMeta }: FieldIconProps) => {
       console.error(err);
     }
 
+    // If no values exist yet, show a placeholder checkbox
+    if (!field.fieldMeta.values || field.fieldMeta.values.length === 0) {
+      return (
+        <div
+          className={cn(
+            'flex gap-1 py-0.5',
+            field.fieldMeta.direction === 'horizontal' ? 'flex-row flex-wrap' : 'flex-col gap-y-1',
+          )}
+        >
+          <div className="flex items-center">
+            <Checkbox className="h-3 w-3" disabled />
+            <Label className="ml-1.5 font-normal text-foreground text-xs opacity-50">
+              <Trans>Checkbox option</Trans>
+            </Label>
+          </div>
+        </div>
+      );
+    }
+
     return (
-      <div className="flex flex-col gap-y-1 py-0.5">
+      <div
+        className={cn(
+          'flex gap-1 py-0.5',
+          field.fieldMeta.direction === 'horizontal' ? 'flex-row flex-wrap' : 'flex-col gap-y-1',
+        )}
+      >
         {field.fieldMeta.values.map((item, index) => (
           <div key={index} className="flex items-center">
             <Checkbox
@@ -68,10 +84,7 @@ export const FieldContent = ({ field, documentMeta }: FieldIconProps) => {
             />
 
             {item.value && (
-              <Label
-                htmlFor={`checkbox-${index}`}
-                className="text-foreground ml-1.5 text-xs font-normal"
-              >
+              <Label htmlFor={`checkbox-${index}`} className="ml-1.5 font-normal text-foreground text-xs">
                 {item.value}
               </Label>
             )}
@@ -100,10 +113,7 @@ export const FieldContent = ({ field, documentMeta }: FieldIconProps) => {
                 checked={item.value === field.customText}
               />
               {item.value && (
-                <Label
-                  htmlFor={`option-${index}`}
-                  className="text-foreground ml-1.5 text-xs font-normal"
-                >
+                <Label htmlFor={`option-${index}`} className="ml-1.5 font-normal text-foreground text-xs">
                   {item.value}
                 </Label>
               )}
@@ -114,41 +124,30 @@ export const FieldContent = ({ field, documentMeta }: FieldIconProps) => {
     );
   }
 
-  if (
-    field.type === FieldType.DROPDOWN &&
-    field.fieldMeta?.type === 'dropdown' &&
-    !field.inserted
-  ) {
+  if (field.type === FieldType.DROPDOWN && field.fieldMeta?.type === 'dropdown' && !field.inserted) {
     return (
-      <div className="text-field-card-foreground xxs:text-[0.5rem] xs:text-[0.55rem] flex flex-row items-center py-0.5 text-[0.5rem] text-sm sm:text-[0.6rem]">
-        <p>Select</p>
+      <div className="flex flex-row items-center py-0.5 text-[clamp(0.07rem,12cqw,0.6rem)] text-field-card-foreground text-sm">
+        <p>
+          <Trans>Select</Trans>
+        </p>
         <ChevronDown className="h-4 w-4" />
       </div>
     );
   }
 
-  if (
-    field.type === FieldType.SIGNATURE &&
-    field.signature?.signatureImageAsBase64 &&
-    field.inserted
-  ) {
+  if (field.type === FieldType.SIGNATURE && field.signature?.signatureImageAsBase64 && field.inserted) {
     return (
-      <img
-        src={field.signature.signatureImageAsBase64}
-        alt="Signature"
-        className="h-full w-full object-contain"
-      />
+      <img src={field.signature.signatureImageAsBase64} alt="Signature" className="h-full w-full object-contain" />
     );
   }
 
-  let textToDisplay = fieldMeta?.label || _(FRIENDLY_FIELD_TYPE[type]) || '';
+  const labelToDisplay = fieldMeta?.label || _(FRIENDLY_FIELD_TYPE[type]) || '';
+  let textToDisplay: string | undefined;
 
-  const isSignatureField =
-    field.type === FieldType.SIGNATURE || field.type === FieldType.FREE_SIGNATURE;
+  const isSignatureField = field.type === FieldType.SIGNATURE || field.type === FieldType.FREE_SIGNATURE;
 
-  // Trim default labels.
-  if (textToDisplay.length > 20) {
-    textToDisplay = textToDisplay.substring(0, 20) + '...';
+  if (field.type === FieldType.TEXT && field.fieldMeta?.type === 'text' && field.fieldMeta?.text) {
+    textToDisplay = field.fieldMeta.text;
   }
 
   if (field.inserted) {
@@ -171,18 +170,19 @@ export const FieldContent = ({ field, documentMeta }: FieldIconProps) => {
   const textAlign = fieldMeta && 'textAlign' in fieldMeta ? fieldMeta.textAlign : 'left';
 
   return (
-    <div
-      className={cn(
-        'text-field-card-foreground xxs:text-[0.5rem] xs:text-[0.55rem] text-wrap-field flex h-full w-full max-w-full items-center justify-center gap-x-1.5 overflow-visible whitespace-normal break-words text-center text-[0.5rem] sm:text-[0.6rem]',
-        {
-          // Using justify instead of align because we also vertically center the text.
-          'justify-start': field.inserted && !isSignatureField && textAlign === 'left',
-          'justify-end': field.inserted && !isSignatureField && textAlign === 'right',
-          'font-signature text-[0.6rem]': isSignatureField,
-        },
-      )}
-    >
-      {textToDisplay}
+    <div className="flex h-full w-full items-center overflow-visible">
+      <p
+        className={cn(
+          'w-full max-w-full whitespace-normal break-words text-left text-[clamp(0.07rem,12cqw,0.6rem)] text-field-card-foreground duration-200',
+          {
+            '!text-center': textAlign === 'center' || !textToDisplay,
+            '!text-right': textAlign === 'right',
+            'font-signature text-[clamp(0.07rem,12cqw,1.125rem)]': isSignatureField,
+          },
+        )}
+      >
+        {textToDisplay || labelToDisplay}
+      </p>
     </div>
   );
 };

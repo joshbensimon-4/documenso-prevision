@@ -13,6 +13,7 @@ export type HandlerTriggerWebhooksResponse =
       error: string;
     };
 
+// Todo: [Webhooks] delete after deployment.
 export const handlerTriggerWebhooks = async (req: Request) => {
   const signature = req.headers.get('x-webhook-signature');
 
@@ -54,8 +55,5 @@ export const handlerTriggerWebhooks = async (req: Request) => {
     }),
   );
 
-  return Response.json(
-    { success: true, message: 'Webhooks queued for execution' },
-    { status: 200 },
-  );
+  return Response.json({ success: true, message: 'Webhooks queued for execution' }, { status: 200 });
 };

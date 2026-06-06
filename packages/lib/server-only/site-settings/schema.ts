@@ -1,9 +1,14 @@
 import { z } from 'zod';
 
 import { ZSiteSettingsBannerSchema } from './schemas/banner';
+import { ZSiteSettingsEmailBlocklistSchema } from './schemas/email-blocklist';
+import { ZSiteSettingsTelemetrySchema } from './schemas/telemetry';
 
-// TODO: Use `z.union([...])` once we have more than one setting
-export const ZSiteSettingSchema = ZSiteSettingsBannerSchema;
+export const ZSiteSettingSchema = z.union([
+  ZSiteSettingsBannerSchema,
+  ZSiteSettingsEmailBlocklistSchema,
+  ZSiteSettingsTelemetrySchema,
+]);
 
 export type TSiteSettingSchema = z.infer<typeof ZSiteSettingSchema>;
 

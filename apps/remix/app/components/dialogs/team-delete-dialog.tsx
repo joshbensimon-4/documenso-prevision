@@ -1,13 +1,5 @@
-import { useEffect, useState } from 'react';
-
-import { zodResolver } from '@hookform/resolvers/zod';
-import { msg } from '@lingui/core/macro';
-import { useLingui } from '@lingui/react';
-import { Trans } from '@lingui/react/macro';
-import { useForm } from 'react-hook-form';
-import { useNavigate } from 'react-router';
-import { z } from 'zod';
-
+import { useCurrentOrganisation } from '@documenso/lib/client-only/providers/organisation';
+import { useSession } from '@documenso/lib/client-only/providers/session';
 import { AppError } from '@documenso/lib/errors/app-error';
 import { trpc } from '@documenso/trpc/react';
 import { Button } from '@documenso/ui/primitives/button';
@@ -20,51 +12,65 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@documenso/ui/primitives/dialog';
-import {
-  Form,
-  FormControl,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from '@documenso/ui/primitives/form/form';
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@documenso/ui/primitives/form/form';
 import { Input } from '@documenso/ui/primitives/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@documenso/ui/primitives/select';
 import type { Toast } from '@documenso/ui/primitives/use-toast';
 import { useToast } from '@documenso/ui/primitives/use-toast';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { msg } from '@lingui/core/macro';
+import { useLingui } from '@lingui/react';
+import { Trans } from '@lingui/react/macro';
+import { useEffect, useState } from 'react';
+import { useForm } from 'react-hook-form';
+import { useNavigate } from 'react-router';
+import { z } from 'zod';
 
 export type TeamDeleteDialogProps = {
   teamId: number;
   teamName: string;
+  redirectTo?: string;
   trigger?: React.ReactNode;
 };
 
-export const TeamDeleteDialog = ({ trigger, teamId, teamName }: TeamDeleteDialogProps) => {
+export const TeamDeleteDialog = ({ trigger, teamId, teamName, redirectTo }: TeamDeleteDialogProps) => {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
 
   const { _ } = useLingui();
   const { toast } = useToast();
+  const { refreshSession } = useSession();
+
+  const currentOrganisation = useCurrentOrganisation();
 
   const deleteMessage = _(msg`delete ${teamName}`);
+
+  const filteredTeams = currentOrganisation.teams.filter((team) => team.id !== teamId);
 
   const ZDeleteTeamFormSchema = z.object({
     teamName: z.literal(deleteMessage, {
       errorMap: () => ({ message: _(msg`You must enter '${deleteMessage}' to proceed`) }),
     }),
+    transferTeamId: z.string().optional(),
   });
 
   const form = useForm({
     resolver: zodResolver(ZDeleteTeamFormSchema),
     defaultValues: {
       teamName: '',
+      transferTeamId: undefined,
     },
   });
 
-  const { mutateAsync: deleteTeam } = trpc.team.deleteTeam.useMutation();
+  const { mutateAsync: deleteTeam } = trpc.team.delete.useMutation();
 
-  const onFormSubmit = async () => {
+  const onFormSubmit = async (data: z.infer<typeof ZDeleteTeamFormSchema>) => {
     try {
-      await deleteTeam({ teamId });
+      const transferTeamId = data.transferTeamId ? parseInt(data.transferTeamId, 10) : undefined;
+
+      await deleteTeam({ teamId, transferTeamId: transferTeamId || undefined });
+
+      await refreshSession();
 
       toast({
         title: _(msg`Success`),
@@ -72,7 +78,9 @@ export const TeamDeleteDialog = ({ trigger, teamId, teamName }: TeamDeleteDialog
         duration: 5000,
       });
 
-      await navigate('/settings/teams');
+      if (redirectTo) {
+        await navigate(redirectTo);
+      }
 
       setOpen(false);
     } catch (err) {
@@ -113,7 +121,7 @@ export const TeamDeleteDialog = ({ trigger, teamId, teamName }: TeamDeleteDialog
       <DialogTrigger asChild>
         {trigger ?? (
           <Button variant="destructive">
-            <Trans>Delete team</Trans>
+            <Trans>Delete</Trans>
           </Button>
         )}
       </DialogTrigger>
@@ -126,18 +134,15 @@ export const TeamDeleteDialog = ({ trigger, teamId, teamName }: TeamDeleteDialog
 
           <DialogDescription className="mt-4">
             <Trans>
-              Please note that you will lose access to all documents associated with this team & all
-              the members will be removed and notified
+              Please note that you will lose access to all documents associated with this team & all the members will be
+              removed and notified
             </Trans>
           </DialogDescription>
         </DialogHeader>
 
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onFormSubmit)}>
-            <fieldset
-              className="flex h-full flex-col space-y-4"
-              disabled={form.formState.isSubmitting}
-            >
+            <fieldset className="flex h-full flex-col space-y-4" disabled={form.formState.isSubmitting}>
               <FormField
                 control={form.control}
                 name="teamName"
@@ -155,6 +160,41 @@ export const TeamDeleteDialog = ({ trigger, teamId, teamName }: TeamDeleteDialog
                   </FormItem>
                 )}
               />
+
+              {filteredTeams.length > 0 && (
+                <FormField
+                  control={form.control}
+                  name="transferTeamId"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>
+                        <Trans>Transfer documents to a different team</Trans>
+                      </FormLabel>
+                      <FormControl>
+                        <Select {...field} onValueChange={field.onChange}>
+                          <SelectTrigger>
+                            <SelectValue placeholder={_(msg`Don't transfer (Delete all documents)`)} />
+                          </SelectTrigger>
+
+                          <SelectContent>
+                            <SelectItem value="-1">
+                              <Trans>Don't transfer (Delete all documents)</Trans>
+                            </SelectItem>
+
+                            {filteredTeams.map((team) => (
+                              <SelectItem key={team.id} value={team.id.toString()}>
+                                {team.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </FormControl>
+
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              )}
 
               <DialogFooter>
                 <Button type="button" variant="secondary" onClick={() => setOpen(false)}>

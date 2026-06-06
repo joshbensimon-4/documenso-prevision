@@ -1,450 +1,482 @@
-import {
-  DocumentStatus,
-  FieldType,
-  RecipientRole,
-  SigningStatus,
-  WebhookTriggerEvents,
-} from '@prisma/client';
-import { nanoid } from 'nanoid';
 import path from 'node:path';
-import { PDFDocument, PDFFont } from 'pdf-lib';
-
+import { PDFDocument } from '@cantoo/pdf-lib';
+import { addRejectionStampToPdf } from '@documenso/lib/server-only/pdf/add-rejection-stamp-to-pdf';
+import { generateAuditLogPdf } from '@documenso/lib/server-only/pdf/generate-audit-log-pdf';
+import { generateCertificatePdf } from '@documenso/lib/server-only/pdf/generate-certificate-pdf';
+import { getLastPageDimensions } from '@documenso/lib/server-only/pdf/get-page-size';
 import { prisma } from '@documenso/prisma';
 import { signPdf } from '@documenso/signing';
+import { PDF } from '@libpdf/core';
+import type { DocumentData, Envelope, EnvelopeItem, Field } from '@prisma/client';
+import { DocumentStatus, EnvelopeType, RecipientRole, SigningStatus, WebhookTriggerEvents } from '@prisma/client';
+import { nanoid } from 'nanoid';
+import { groupBy } from 'remeda';
 
+import { NEXT_PRIVATE_USE_PLAYWRIGHT_PDF } from '../../../constants/app';
 import { AppError, AppErrorCode } from '../../../errors/app-error';
-import { sendCompletedEmail } from '../../../server-only/document/send-completed-email';
-import PostHogServerClient from '../../../server-only/feature-flags/get-post-hog-server-client';
+import { getAuditLogsPdf } from '../../../server-only/htmltopdf/get-audit-logs-pdf';
 import { getCertificatePdf } from '../../../server-only/htmltopdf/get-certificate-pdf';
-import { addRejectionStampToPdf } from '../../../server-only/pdf/add-rejection-stamp-to-pdf';
-import { flattenAnnotations } from '../../../server-only/pdf/flatten-annotations';
-import { flattenForm } from '../../../server-only/pdf/flatten-form';
-import { insertFieldInPDF } from '../../../server-only/pdf/insert-field-in-pdf';
+import { insertFieldInPDFV1 } from '../../../server-only/pdf/insert-field-in-pdf-v1';
+import { insertFieldInPDFV2 } from '../../../server-only/pdf/insert-field-in-pdf-v2';
 import { legacy_insertFieldInPDF } from '../../../server-only/pdf/legacy-insert-field-in-pdf';
-import { normalizeSignatureAppearances } from '../../../server-only/pdf/normalize-signature-appearances';
+import { getTeamSettings } from '../../../server-only/team/get-team-settings';
 import { triggerWebhook } from '../../../server-only/webhooks/trigger/trigger-webhook';
-import { DOCUMENT_AUDIT_LOG_TYPE } from '../../../types/document-audit-logs';
-import {
-  ZWebhookDocumentSchema,
-  mapDocumentToWebhookDocumentPayload,
-} from '../../../types/webhook-payload';
+import { DOCUMENT_AUDIT_LOG_TYPE, type TDocumentAuditLog } from '../../../types/document-audit-logs';
+import { mapEnvelopeToWebhookDocumentPayload, ZWebhookDocumentSchema } from '../../../types/webhook-payload';
 import { prefixedId } from '../../../universal/id';
 import { getFileServerSide } from '../../../universal/upload/get-file.server';
 import { putPdfFileServerSide } from '../../../universal/upload/put-file.server';
 import { fieldsContainUnsignedRequiredField } from '../../../utils/advanced-fields-helpers';
 import { isDocumentCompleted } from '../../../utils/document';
 import { createDocumentAuditLogData } from '../../../utils/document-audit-logs';
+import { mapDocumentIdToSecondaryId } from '../../../utils/envelope';
+import { jobs } from '../../client';
 import type { JobRunIO } from '../../client/_internal/job';
 import type { TSealDocumentJobDefinition } from './seal-document';
 
-export const run = async ({
-  payload,
-  io,
-}: {
-  payload: TSealDocumentJobDefinition;
-  io: JobRunIO;
-}) => {
+export const run = async ({ payload, io }: { payload: TSealDocumentJobDefinition; io: JobRunIO }) => {
   const { documentId, sendEmail = true, isResealing = false, requestMetadata } = payload;
 
-  const document = await prisma.document.findFirstOrThrow({
-    where: {
-      id: documentId,
-    },
-    include: {
-      documentMeta: true,
-      recipients: true,
-      team: {
-        select: {
-          teamGlobalSettings: {
-            select: {
-              includeSigningCertificate: true,
+  const { envelopeId, envelopeStatus, isRejected } = await io.runTask('seal-document', async () => {
+    const envelope = await prisma.envelope.findFirstOrThrow({
+      where: {
+        type: EnvelopeType.DOCUMENT,
+        secondaryId: mapDocumentIdToSecondaryId(documentId),
+      },
+      include: {
+        user: {
+          select: {
+            name: true,
+            email: true,
+          },
+        },
+        documentMeta: true,
+        recipients: true,
+        fields: {
+          include: {
+            signature: true,
+          },
+        },
+        envelopeItems: {
+          include: {
+            documentData: true,
+            field: {
+              include: {
+                signature: true,
+              },
             },
           },
         },
       },
-    },
-  });
-
-  const isComplete =
-    document.recipients.some((recipient) => recipient.signingStatus === SigningStatus.REJECTED) ||
-    document.recipients.every((recipient) => recipient.signingStatus === SigningStatus.SIGNED);
-
-  if (!isComplete) {
-    throw new AppError(AppErrorCode.UNKNOWN_ERROR, {
-      message: 'Document is not complete',
     });
-  }
 
-  // Seems silly but we need to do this in case the job is re-ran
-  // after it has already run through the update task further below.
-  // eslint-disable-next-line @typescript-eslint/require-await
-  const _documentStatus = await io.runTask('get-document-status', async () => {
-    return document.status;
-  });
+    if (envelope.envelopeItems.length === 0) {
+      throw new Error('At least one envelope item required');
+    }
 
-  // This is the same case as above.
-  // eslint-disable-next-line @typescript-eslint/require-await
-  const documentDataId = await io.runTask('get-document-data-id', async () => {
-    return document.documentDataId;
-  });
+    const settings = await getTeamSettings({
+      userId: envelope.userId,
+      teamId: envelope.teamId,
+    });
 
-  const documentData = await prisma.documentData.findFirst({
-    where: {
-      id: documentDataId,
-    },
-  });
-
-  if (!documentData) {
-    throw new Error(`Document ${document.id} has no document data`);
-  }
-
-  const recipients = await prisma.recipient.findMany({
-    where: {
-      documentId: document.id,
-      role: {
-        not: RecipientRole.CC,
-      },
-    },
-  });
-
-  // Determine if the document has been rejected by checking if any recipient has rejected it
-  const rejectedRecipient = recipients.find(
-    (recipient) => recipient.signingStatus === SigningStatus.REJECTED,
-  );
-
-  const isRejected = Boolean(rejectedRecipient);
-
-  // Get the rejection reason from the rejected recipient
-  const rejectionReason = rejectedRecipient?.rejectionReason ?? '';
-
-  const fields = await prisma.field.findMany({
-    where: {
-      documentId: document.id,
-    },
-    include: {
-      signature: true,
-    },
-  });
-
-  // Skip the field check if the document is rejected
-  if (!isRejected && fieldsContainUnsignedRequiredField(fields)) {
-    throw new Error(`Document ${document.id} has unsigned required fields`);
-  }
-
-  if (isResealing) {
-    // If we're resealing we want to use the initial data for the document
-    // so we aren't placing fields on top of eachother.
-    documentData.data = documentData.initialData;
-  }
-
-  if (!document.qrToken) {
-    await prisma.document.update({
+    // Ensure all CC recipients are marked as signed
+    await prisma.recipient.updateMany({
       where: {
-        id: document.id,
+        envelopeId: envelope.id,
+        role: RecipientRole.CC,
       },
       data: {
-        qrToken: prefixedId('qr'),
+        signingStatus: SigningStatus.SIGNED,
       },
     });
-  }
 
-  const pdfData = await getFileServerSide(documentData);
+    const isComplete =
+      envelope.recipients.some((recipient) => recipient.signingStatus === SigningStatus.REJECTED) ||
+      envelope.recipients.every(
+        (recipient) => recipient.signingStatus === SigningStatus.SIGNED || recipient.role === RecipientRole.CC,
+      );
 
-  // Separate signature fields from non-signature fields
-  const signatureFields = fields.filter(
-    (field) => field.type === FieldType.SIGNATURE || field.type === FieldType.FREE_SIGNATURE,
-  );
-
-  const nonSignatureFields = fields.filter(
-    (field) => field.type !== FieldType.SIGNATURE && field.type !== FieldType.FREE_SIGNATURE,
-  );
-
-  const hasSignatureField = signatureFields.length > 0;
-
-  const certificateData =
-    hasSignatureField && (document.team?.teamGlobalSettings?.includeSigningCertificate ?? true)
-      ? await getCertificatePdf({
-          documentId,
-          language: document.documentMeta?.language,
-        }).catch(() => null)
-      : null;
-
-  const newDataId = await io.runTask('decorate-and-sign-pdf', async () => {
-    const pdfDoc = await PDFDocument.load(pdfData);
-
-    // Normalize and flatten layers that could cause issues with the signature
-    normalizeSignatureAppearances(pdfDoc);
-    flattenForm(pdfDoc);
-    flattenAnnotations(pdfDoc);
-
-    // Add rejection stamp if the document is rejected
-    if (isRejected && rejectionReason) {
-      await addRejectionStampToPdf(pdfDoc, rejectionReason);
+    if (!isComplete) {
+      throw new AppError(AppErrorCode.UNKNOWN_ERROR, {
+        message: 'Document is not complete',
+      });
     }
 
-        // For non-signature fields, draw them directly on the PDF as text instead of using fields
-    for (const field of nonSignatureFields) {
-      if (!field.inserted) {
-        continue;
-      }
-      
-      const pages = pdfDoc.getPages();
-      const page = pages.at(field.page - 1);
-      
-      if (!page) {
-        continue;
-      }
-      
-      const pageWidth = page.getWidth();
-      const pageHeight = page.getHeight();
-      
-      const fieldWidth = pageWidth * (Number(field.width) / 100);
-      const fieldHeight = pageHeight * (Number(field.height) / 100);
-      
-      const fieldX = pageWidth * (Number(field.positionX) / 100);
-      const fieldY = pageHeight * (Number(field.positionY) / 100);
-      
-      // Invert the Y axis since PDFs use a bottom-left coordinate system
-      const invertedY = pageHeight - fieldY - fieldHeight;
-      
-      // Draw the text directly on the PDF with word wrapping
-      const fontSize = 8; // Set an appropriate font size
-      const font = await pdfDoc.embedFont('Helvetica');
-      const padding = 4; // Padding inside the field
+    let { envelopeItems } = envelope;
 
-      if (field.customText) {
-        // Break text into lines that fit within the field width
-        const availableWidth = fieldWidth - (padding * 2);
-        const wrappedText = breakLongString(field.customText, availableWidth, font, fontSize);
-        const lines = wrappedText.split('\n');
-        
-        // Calculate line height based on font size
-        const lineHeight = fontSize * 1.2; // 20% extra space between lines
-        
-        // Start from the top of the field
-        let currentY = invertedY + fieldHeight - padding - fontSize;
-        
-        // Draw each line
-        for (const line of lines) {
-          // Stop if we've run out of vertical space
-          if (currentY < invertedY + padding) {
-            break;
-          }
-          
-          page.drawText(line, {
-            x: fieldX + padding,
-            y: currentY,
-            size: fontSize,
-            font,
-          });
-          
-          currentY -= lineHeight;
-        }
-      }
+    const fields = envelope.fields;
+
+    if (envelopeItems.length < 1) {
+      throw new Error(`Document ${envelope.id} has no envelope items`);
     }
 
-    /**
-     * Break a long string into multiple lines so it fits within a given width,
-     * using natural word breaking similar to word processors.
-     */
-    function breakLongString(text: string, maxWidth: number, font: PDFFont, fontSize: number): string {
-      if (!text) return '';
+    const recipientsWithoutCCers = envelope.recipients.filter((recipient) => recipient.role !== RecipientRole.CC);
 
-      const lines: string[] = [];
+    // Determine if the document has been rejected by checking if any recipient has rejected it
+    const rejectedRecipient = recipientsWithoutCCers.find(
+      (recipient) => recipient.signingStatus === SigningStatus.REJECTED,
+    );
 
-      // Process each original line separately to preserve newlines
-      for (const paragraph of text.split('\n')) {
-        // If paragraph fits on one line or is empty, add it as-is
-        if (paragraph === '' || font.widthOfTextAtSize(paragraph, fontSize) <= maxWidth) {
-          lines.push(paragraph);
-          continue;
-        }
+    const isRejected = Boolean(rejectedRecipient);
 
-        // Split paragraph into words
-        const words = paragraph.split(' ');
-        let currentLine = '';
+    // Get the rejection reason from the rejected recipient
+    const rejectionReason = rejectedRecipient?.rejectionReason ?? '';
 
-        for (const word of words) {
-          // Check if adding word to current line would exceed max width
-          const lineWithWord = currentLine.length === 0 ? word : `${currentLine} ${word}`;
-
-          if (font.widthOfTextAtSize(lineWithWord, fontSize) <= maxWidth) {
-            // Word fits, add it to current line
-            currentLine = lineWithWord;
-          } else {
-            // Word doesn't fit on current line
-
-            // First, save current line if it's not empty
-            if (currentLine.length > 0) {
-              lines.push(currentLine);
-              currentLine = '';
-            }
-
-            // Check if word fits on a line by itself
-            if (font.widthOfTextAtSize(word, fontSize) <= maxWidth) {
-              // Word fits on its own line
-              currentLine = word;
-            } else {
-              // Word is too long, need to break it character by character
-              let charLine = '';
-
-              // Process each character in the word
-              for (const char of word) {
-                const nextCharLine = charLine + char;
-
-                if (font.widthOfTextAtSize(nextCharLine, fontSize) <= maxWidth) {
-                  // Character fits, add it
-                  charLine = nextCharLine;
-                } else {
-                  // Character doesn't fit, push current charLine and start a new one
-                  lines.push(charLine);
-                  charLine = char;
-                }
-              }
-
-              // Add any remaining characters as the current line
-              currentLine = charLine;
-            }
-          }
-        }
-
-        // Add the last line if not empty
-        if (currentLine.length > 0) {
-          lines.push(currentLine);
-        }
-      }
-
-      return lines.join('\n');
+    // Skip the field check if the document is rejected
+    if (!isRejected && fieldsContainUnsignedRequiredField(fields)) {
+      throw new Error(`Document ${envelope.id} has unsigned required fields`);
     }
 
-    // If we have signature fields, add the certificate and process the signature fields
-    if (hasSignatureField) {
-      if (certificateData) {
-        const certificateDoc = await PDFDocument.load(Uint8Array.from(certificateData));
-        const certificatePages = await pdfDoc.copyPages(
-          certificateDoc,
-          certificateDoc.getPageIndices(),
-        );
-        certificatePages.forEach((page) => {
-          pdfDoc.addPage(page);
+    if (isResealing) {
+      // If we're resealing we want to use the initial data for the document
+      // so we aren't placing fields on top of eachother.
+      envelopeItems = envelopeItems.map((envelopeItem) => ({
+        ...envelopeItem,
+        documentData: {
+          ...envelopeItem.documentData,
+          data: envelopeItem.documentData.initialData,
+        },
+      }));
+    }
+
+    if (!envelope.qrToken) {
+      await prisma.envelope.update({
+        where: {
+          id: envelope.id,
+        },
+        data: {
+          qrToken: prefixedId('qr'),
+        },
+      });
+    }
+
+    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
+    const envelopeCompletedAuditLog = createDocumentAuditLogData({
+      type: DOCUMENT_AUDIT_LOG_TYPE.DOCUMENT_COMPLETED,
+      envelopeId: envelope.id,
+      requestMetadata,
+      user: null,
+      data: {
+        transactionId: nanoid(),
+        ...(isRejected ? { isRejected: true, rejectionReason: rejectionReason } : {}),
+      },
+    });
+
+    const finalEnvelopeStatus = isRejected ? DocumentStatus.REJECTED : DocumentStatus.COMPLETED;
+
+    // Pre-fetch all PDF data so we can read dimensions and pass it
+    // to decorateAndSignPdf without fetching again.
+    const prefetchedItems = await Promise.all(
+      envelopeItems.map(async (envelopeItem) => {
+        const pdfData = await getFileServerSide(envelopeItem.documentData);
+
+        return { envelopeItem, pdfData };
+      }),
+    );
+
+    const usePlaywrightPdf = NEXT_PRIVATE_USE_PLAYWRIGHT_PDF();
+
+    const needsCertificate = settings.includeSigningCertificate;
+    const needsAuditLog = settings.includeAuditLog;
+
+    const newDocumentData: Array<{ oldDocumentDataId: string; newDocumentDataId: string }> = [];
+
+    for (const { envelopeItem, pdfData } of prefetchedItems) {
+      const envelopeItemFields = envelope.envelopeItems.find((item) => item.id === envelopeItem.id)?.field;
+
+      if (!envelopeItemFields) {
+        throw new Error(`Envelope item fields not found for envelope item ${envelopeItem.id}`);
+      }
+
+      let certificateDoc: PDF | null = null;
+      let auditLogDoc: PDF | null = null;
+
+      if (needsCertificate || needsAuditLog) {
+        const pdfDoc = await PDF.load(pdfData);
+
+        const { width: pageWidth, height: pageHeight } = getLastPageDimensions(pdfDoc);
+
+        const additionalAuditLogs = [
+          // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
+          {
+            ...envelopeCompletedAuditLog,
+            id: '',
+            createdAt: new Date(),
+          } as TDocumentAuditLog,
+        ];
+
+        const certificatePayload = {
+          envelope: {
+            ...envelope,
+            status: finalEnvelopeStatus,
+          },
+          recipients: envelope.recipients,
+          fields,
+          language: envelope.documentMeta.language,
+          envelopeOwner: {
+            email: envelope.user.email,
+            name: envelope.user.name || '',
+          },
+          envelopeItems: envelopeItems.map((item) => item.title),
+          pageWidth,
+          pageHeight,
+          additionalAuditLogs,
+        };
+
+        const makeCertificatePdf = async () =>
+          usePlaywrightPdf
+            ? getCertificatePdf({
+                documentId,
+                language: envelope.documentMeta.language,
+              }).then(async (buffer) => PDF.load(buffer))
+            : generateCertificatePdf(certificatePayload);
+
+        const makeAuditLogPdf = async () =>
+          usePlaywrightPdf
+            ? getAuditLogsPdf({
+                documentId,
+                language: envelope.documentMeta.language,
+              }).then(async (buffer) => PDF.load(buffer))
+            : generateAuditLogPdf(certificatePayload);
+
+        [certificateDoc, auditLogDoc] = await Promise.all([
+          needsCertificate ? makeCertificatePdf() : null,
+          needsAuditLog ? makeAuditLogPdf() : null,
+        ]);
+      }
+
+      const result = await decorateAndSignPdf({
+        envelope,
+        envelopeItem,
+        envelopeItemFields,
+        isRejected,
+        rejectionReason,
+        pdfData,
+        certificateDoc,
+        auditLogDoc,
+      });
+
+      newDocumentData.push(result);
+    }
+
+    await prisma.$transaction(async (tx) => {
+      for (const { oldDocumentDataId, newDocumentDataId } of newDocumentData) {
+        await tx.envelopeItem.update({
+          where: {
+            envelopeId: envelope.id,
+            documentDataId: oldDocumentDataId,
+          },
+          data: {
+            documentDataId: newDocumentDataId,
+          },
         });
       }
 
-      // Process signature fields using the proper field mechanism
-      for (const field of signatureFields) {
-        if (field.inserted) {
-          document.useLegacyFieldInsertion
-            ? await legacy_insertFieldInPDF(pdfDoc, field)
-            : await insertFieldInPDF(pdfDoc, field);
-        }
-      }
-    }
-
-    // Re-flatten the form to handle our checkbox and radio fields that
-    // create native arcoFields
-    flattenForm(pdfDoc);
-
-    const pdfBytes = await pdfDoc.save();
-    const pdfBuffer = await signPdf({ pdf: Buffer.from(pdfBytes) });
-
-    const { name } = path.parse(document.title);
-
-    // Add suffix based on document status
-    const suffix = isRejected ? '_rejected.pdf' : '_signed.pdf';
-
-    const documentData = await putPdfFileServerSide({
-      name: `${name}${suffix}`,
-      type: 'application/pdf',
-      arrayBuffer: async () => Promise.resolve(pdfBuffer.buffer as ArrayBuffer),
-    });
-
-    return documentData.id;
-  });
-
-  const postHog = PostHogServerClient();
-
-  if (postHog) {
-    postHog.capture({
-      distinctId: nanoid(),
-      event: 'App: Document Sealed',
-      properties: {
-        documentId: document.id,
-        isRejected,
-      },
-    });
-  }
-
-  await io.runTask('update-document', async () => {
-    await prisma.$transaction(async (tx) => {
-      const newData = await tx.documentData.findFirstOrThrow({
+      await tx.envelope.update({
         where: {
-          id: newDataId,
-        },
-      });
-
-      await tx.document.update({
-        where: {
-          id: document.id,
+          id: envelope.id,
         },
         data: {
-          status: isRejected ? DocumentStatus.REJECTED : DocumentStatus.COMPLETED,
+          status: finalEnvelopeStatus,
           completedAt: new Date(),
         },
       });
 
-      await tx.documentData.update({
-        where: {
-          id: documentData.id,
-        },
-        data: {
-          data: newData.data,
-        },
-      });
-
       await tx.documentAuditLog.create({
-        data: createDocumentAuditLogData({
-          type: DOCUMENT_AUDIT_LOG_TYPE.DOCUMENT_COMPLETED,
-          documentId: document.id,
-          requestMetadata,
-          user: null,
-          data: {
-            transactionId: nanoid(),
-            ...(isRejected ? { isRejected: true, rejectionReason: rejectionReason } : {}),
-          },
-        }),
+        data: envelopeCompletedAuditLog,
       });
     });
+
+    return {
+      envelopeId: envelope.id,
+      envelopeStatus: envelope.status,
+      isRejected,
+    };
   });
 
-  await io.runTask('send-completed-email', async () => {
-    let shouldSendCompletedEmail = sendEmail && !isResealing && !isRejected;
-
-    if (isResealing && !isDocumentCompleted(document.status)) {
-      shouldSendCompletedEmail = sendEmail;
-    }
-
-    if (shouldSendCompletedEmail) {
-      await sendCompletedEmail({ documentId, requestMetadata });
-    }
-  });
-
-  const updatedDocument = await prisma.document.findFirstOrThrow({
+  const updatedEnvelope = await prisma.envelope.findFirstOrThrow({
     where: {
-      id: document.id,
+      id: envelopeId,
     },
     include: {
-      documentData: true,
       documentMeta: true,
       recipients: true,
     },
   });
 
   await triggerWebhook({
-    event: isRejected
-      ? WebhookTriggerEvents.DOCUMENT_REJECTED
-      : WebhookTriggerEvents.DOCUMENT_COMPLETED,
-    data: ZWebhookDocumentSchema.parse(mapDocumentToWebhookDocumentPayload(updatedDocument)),
-    userId: updatedDocument.userId,
-    teamId: updatedDocument.teamId ?? undefined,
+    event: isRejected ? WebhookTriggerEvents.DOCUMENT_REJECTED : WebhookTriggerEvents.DOCUMENT_COMPLETED,
+    data: ZWebhookDocumentSchema.parse(mapEnvelopeToWebhookDocumentPayload(updatedEnvelope)),
+    userId: updatedEnvelope.userId,
+    teamId: updatedEnvelope.teamId ?? undefined,
   });
+
+  let shouldSendCompletedEmail = sendEmail && !isResealing && !isRejected;
+
+  if (isResealing && !isDocumentCompleted(envelopeStatus)) {
+    shouldSendCompletedEmail = sendEmail;
+  }
+
+  if (shouldSendCompletedEmail) {
+    await jobs.triggerJob({
+      name: 'send.document.completed.emails',
+      payload: {
+        envelopeId,
+        requestMetadata,
+      },
+    });
+  }
+};
+
+type DecorateAndSignPdfOptions = {
+  envelope: Pick<Envelope, 'id' | 'title' | 'useLegacyFieldInsertion' | 'internalVersion'>;
+  envelopeItem: EnvelopeItem & { documentData: DocumentData };
+  envelopeItemFields: Field[];
+  isRejected: boolean;
+  rejectionReason: string;
+  pdfData: Uint8Array;
+  certificateDoc: PDF | null;
+  auditLogDoc: PDF | null;
+};
+
+/**
+ * Normalize, flatten and insert fields into a PDF document.
+ */
+const decorateAndSignPdf = async ({
+  envelope,
+  envelopeItem,
+  envelopeItemFields,
+  isRejected,
+  rejectionReason,
+  pdfData,
+  certificateDoc,
+  auditLogDoc,
+}: DecorateAndSignPdfOptions) => {
+  let pdfDoc = await PDF.load(pdfData);
+
+  // Normalize and flatten layers that could cause issues with the signature
+  pdfDoc.flattenAll();
+  // Upgrade to PDF 1.7 for better compatibility with signing
+  pdfDoc.upgradeVersion('1.7');
+
+  // Add rejection stamp if the document is rejected
+  if (isRejected) {
+    await addRejectionStampToPdf(pdfDoc, rejectionReason);
+  }
+
+  if (certificateDoc) {
+    await pdfDoc.copyPagesFrom(
+      certificateDoc,
+      Array.from({ length: certificateDoc.getPageCount() }, (_, index) => index),
+    );
+  }
+
+  if (auditLogDoc) {
+    await pdfDoc.copyPagesFrom(
+      auditLogDoc,
+      Array.from({ length: auditLogDoc.getPageCount() }, (_, index) => index),
+    );
+  }
+
+  // Handle V1 and legacy insertions.
+  if (envelope.internalVersion === 1) {
+    const legacy_pdfLibDoc = await PDFDocument.load(await pdfDoc.save({ useXRefStream: true }));
+
+    for (const field of envelopeItemFields) {
+      if (field.inserted) {
+        if (envelope.useLegacyFieldInsertion) {
+          await legacy_insertFieldInPDF(legacy_pdfLibDoc, field);
+        } else {
+          await insertFieldInPDFV1(legacy_pdfLibDoc, field);
+        }
+      }
+    }
+
+    // Should never run into issues with this flatten since all
+    // arcoFields are created by pdf-lib itself.
+    legacy_pdfLibDoc.getForm().flatten();
+
+    await pdfDoc.reload(await legacy_pdfLibDoc.save());
+  }
+
+  // Handle V2 envelope insertions.
+  if (envelope.internalVersion === 2) {
+    const fieldsGroupedByPage = groupBy(envelopeItemFields, (field) => field.page);
+
+    for (const [pageNumber, fields] of Object.entries(fieldsGroupedByPage)) {
+      const page = pdfDoc.getPage(Number(pageNumber) - 1);
+
+      if (!page) {
+        throw new Error(`Page ${pageNumber} does not exist`);
+      }
+
+      const pageWidth = page.width;
+      const pageHeight = page.height;
+
+      const overlayBytes = await insertFieldInPDFV2({
+        pageWidth,
+        pageHeight,
+        fields,
+      });
+
+      const overlayPdf = await PDF.load(overlayBytes);
+
+      const embeddedPage = await pdfDoc.embedPage(overlayPdf, 0);
+
+      // Rotate the page to the orientation that the react-pdf renders on the frontend.
+      let translateX = 0;
+      let translateY = 0;
+
+      switch (page.rotation) {
+        case 90:
+          translateX = pageHeight;
+          translateY = 0;
+          break;
+        case 180:
+          translateX = pageWidth;
+          translateY = pageHeight;
+          break;
+        case 270:
+          translateX = 0;
+          translateY = pageWidth;
+          break;
+      }
+
+      // Draw the overlay on the page
+      page.drawPage(embeddedPage, {
+        x: translateX,
+        y: translateY,
+        rotate: {
+          angle: page.rotation,
+        },
+      });
+    }
+  }
+
+  // Re-flatten the form to handle our checkbox and radio fields that
+  // create native arcoFields
+  pdfDoc.flattenAll();
+
+  pdfDoc = await PDF.load(await pdfDoc.save({ useXRefStream: true }));
+
+  const pdfBytes = await signPdf({ pdf: pdfDoc });
+
+  const { name } = path.parse(envelopeItem.title);
+
+  // Add suffix based on document status
+  const suffix = isRejected ? '_rejected.pdf' : '_signed.pdf';
+
+  const { documentData: newDocumentData } = await putPdfFileServerSide(
+    {
+      name: `${name}${suffix}`,
+      type: 'application/pdf',
+      arrayBuffer: async () => Promise.resolve(pdfBytes),
+    },
+    envelopeItem.documentData.initialData,
+  );
+
+  return {
+    oldDocumentDataId: envelopeItem.documentData.id,
+    newDocumentDataId: newDocumentData.id,
+  };
 };

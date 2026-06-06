@@ -1,11 +1,3 @@
-import { zodResolver } from '@hookform/resolvers/zod';
-import { msg } from '@lingui/core/macro';
-import { useLingui } from '@lingui/react';
-import { Trans } from '@lingui/react/macro';
-import { File as FileIcon, Upload, X } from 'lucide-react';
-import { useForm } from 'react-hook-form';
-import { z } from 'zod';
-
 import { trpc } from '@documenso/trpc/react';
 import { Button } from '@documenso/ui/primitives/button';
 import { Checkbox } from '@documenso/ui/primitives/checkbox';
@@ -20,8 +12,15 @@ import {
 } from '@documenso/ui/primitives/dialog';
 import { Form, FormControl, FormField, FormItem } from '@documenso/ui/primitives/form/form';
 import { useToast } from '@documenso/ui/primitives/use-toast';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { msg } from '@lingui/core/macro';
+import { useLingui } from '@lingui/react';
+import { Trans } from '@lingui/react/macro';
+import { File as FileIcon, Upload, X } from 'lucide-react';
+import { useForm } from 'react-hook-form';
+import { z } from 'zod';
 
-import { useOptionalCurrentTeam } from '~/providers/team';
+import { useCurrentTeam } from '~/providers/team';
 
 const ZBulkSendFormSchema = z.object({
   file: z.instanceof(File),
@@ -37,16 +36,11 @@ export type TemplateBulkSendDialogProps = {
   onSuccess?: () => void;
 };
 
-export const TemplateBulkSendDialog = ({
-  templateId,
-  recipients,
-  trigger,
-  onSuccess,
-}: TemplateBulkSendDialogProps) => {
+export const TemplateBulkSendDialog = ({ templateId, recipients, trigger, onSuccess }: TemplateBulkSendDialogProps) => {
   const { _ } = useLingui();
   const { toast } = useToast();
 
-  const team = useOptionalCurrentTeam();
+  const team = useCurrentTeam();
 
   const form = useForm<TBulkSendFormSchema>({
     resolver: zodResolver(ZBulkSendFormSchema),
@@ -58,10 +52,7 @@ export const TemplateBulkSendDialog = ({
   const { mutateAsync: uploadBulkSend } = trpc.template.uploadBulkSend.useMutation();
 
   const onDownloadTemplate = () => {
-    const headers = recipients.flatMap((_, index) => [
-      `recipient_${index + 1}_email`,
-      `recipient_${index + 1}_name`,
-    ]);
+    const headers = recipients.flatMap((_, index) => [`recipient_${index + 1}_email`, `recipient_${index + 1}_name`]);
 
     const exampleRow = recipients.flatMap((recipient) => [recipient.email, recipient.name || '']);
 
@@ -92,9 +83,7 @@ export const TemplateBulkSendDialog = ({
 
       toast({
         title: _(msg`Success`),
-        description: _(
-          msg`Your bulk send has been initiated. You will receive an email notification upon completion.`,
-        ),
+        description: _(msg`Your bulk send has been initiated. You will receive an email notification upon completion.`),
       });
 
       form.reset();
@@ -103,8 +92,8 @@ export const TemplateBulkSendDialog = ({
       console.error(err);
 
       toast({
-        title: 'Error',
-        description: 'Failed to upload CSV. Please check the file format and try again.',
+        title: _(msg`Error`),
+        description: _(msg`Failed to upload CSV. Please check the file format and try again.`),
         variant: 'destructive',
       });
     }
@@ -114,7 +103,7 @@ export const TemplateBulkSendDialog = ({
     <Dialog>
       <DialogTrigger asChild>
         {trigger ?? (
-          <Button variant="outline">
+          <Button variant="outline" className="shrink-0" size="sm">
             <Upload className="mr-2 h-4 w-4" />
             <Trans>Bulk Send via CSV</Trans>
           </Button>
@@ -129,23 +118,23 @@ export const TemplateBulkSendDialog = ({
 
           <DialogDescription>
             <Trans>
-              Upload a CSV file to create multiple documents from this template. Each row represents
-              one document with its recipient details.
+              Upload a CSV file to create multiple documents from this template. Each row represents one document with
+              its recipient details.
             </Trans>
           </DialogDescription>
         </DialogHeader>
 
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="flex flex-col gap-y-4">
-            <div className="bg-muted/70 rounded-lg border p-4">
-              <h3 className="text-sm font-medium">
+            <div className="rounded-lg border bg-muted/70 p-4">
+              <h3 className="font-medium text-sm">
                 <Trans>CSV Structure</Trans>
               </h3>
 
-              <p className="text-muted-foreground mt-1 text-sm">
+              <p className="mt-1 text-muted-foreground text-sm">
                 <Trans>
-                  For each recipient, provide their email (required) and name (optional) in separate
-                  columns. Download the template CSV below for the correct format.
+                  For each recipient, provide their email (required) and name (optional) in separate columns. Download
+                  the template CSV below for the correct format.
                 </Trans>
               </p>
 
@@ -153,11 +142,9 @@ export const TemplateBulkSendDialog = ({
                 <Trans>Current recipients:</Trans>
               </p>
 
-              <ul className="text-muted-foreground mt-2 list-inside list-disc text-sm">
+              <ul className="mt-2 list-inside list-disc text-muted-foreground text-sm">
                 {recipients.map((recipient, index) => (
-                  <li key={index}>
-                    {recipient.name ? `${recipient.name} (${recipient.email})` : recipient.email}
-                  </li>
+                  <li key={index}>{recipient.name ? `${recipient.name} (${recipient.email})` : recipient.email}</li>
                 ))}
               </ul>
             </div>
@@ -200,14 +187,14 @@ export const TemplateBulkSendDialog = ({
                     ) : (
                       <div className="flex h-10 items-center rounded-md border px-3">
                         <div className="flex flex-1 items-center gap-2">
-                          <FileIcon className="text-muted-foreground h-4 w-4" />
+                          <FileIcon className="h-4 w-4 text-muted-foreground" />
                           <span className="flex-1 truncate text-sm">{value.name}</span>
                         </div>
 
                         <Button
                           type="button"
                           variant="link"
-                          className="text-destructive hover:text-destructive p-0 text-xs"
+                          className="p-0 text-destructive text-xs hover:text-destructive"
                           onClick={() => onChange(null)}
                           disabled={form.formState.isSubmitting}
                         >
@@ -224,8 +211,7 @@ export const TemplateBulkSendDialog = ({
 
                   <p className="text-muted-foreground text-xs">
                     <Trans>
-                      Maximum file size: 4MB. Maximum 100 rows per upload. Blank values will use
-                      template defaults.
+                      Maximum file size: 4MB. Maximum 100 rows per upload. Blank values will use template defaults.
                     </Trans>
                   </p>
                 </FormItem>
@@ -239,15 +225,11 @@ export const TemplateBulkSendDialog = ({
                 <FormItem className="flex items-center space-x-2">
                   <FormControl>
                     <div className="flex items-center">
-                      <Checkbox
-                        id="send-immediately"
-                        checked={field.value}
-                        onCheckedChange={field.onChange}
-                      />
+                      <Checkbox id="send-immediately" checked={field.value} onCheckedChange={field.onChange} />
 
                       <label
                         htmlFor="send-immediately"
-                        className="text-muted-foreground ml-2 flex items-center text-sm"
+                        className="ml-2 flex items-center text-muted-foreground text-sm"
                       >
                         <Trans>Send documents to recipients immediately</Trans>
                       </label>

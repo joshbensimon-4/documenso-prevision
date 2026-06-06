@@ -1,10 +1,6 @@
 // https://github.com/Hopding/pdf-lib/issues/20#issuecomment-412852821
-import fontkit from '@pdf-lib/fontkit';
-import { FieldType } from '@prisma/client';
-import type { PDFDocument } from 'pdf-lib';
-import { RotationTypes, degrees, radiansToDegrees, rgb } from 'pdf-lib';
-import { P, match } from 'ts-pattern';
-
+import type { PDFDocument } from '@cantoo/pdf-lib';
+import { degrees, RotationTypes, radiansToDegrees, rgb } from '@cantoo/pdf-lib';
 import {
   DEFAULT_HANDWRITING_FONT_SIZE,
   DEFAULT_STANDARD_FONT_SIZE,
@@ -14,8 +10,11 @@ import {
 import { fromCheckboxValue } from '@documenso/lib/universal/field-checkbox';
 import { isSignatureFieldType } from '@documenso/prisma/guards/is-signature-field';
 import type { FieldWithSignature } from '@documenso/prisma/types/field-with-signature';
+import fontkit from '@pdf-lib/fontkit';
+import { FieldType } from '@prisma/client';
+import { match, P } from 'ts-pattern';
 
-import { NEXT_PUBLIC_WEBAPP_URL } from '../../constants/app';
+import { NEXT_PRIVATE_INTERNAL_WEBAPP_URL } from '../../constants/app';
 import {
   ZCheckboxFieldMeta,
   ZDateFieldMeta,
@@ -26,11 +25,12 @@ import {
   ZRadioFieldMeta,
   ZTextFieldMeta,
 } from '../../types/field-meta';
+import { getPageSize } from './get-page-size';
 
 export const legacy_insertFieldInPDF = async (pdf: PDFDocument, field: FieldWithSignature) => {
   const [fontCaveat, fontNoto] = await Promise.all([
-    fetch(`${NEXT_PUBLIC_WEBAPP_URL()}/fonts/caveat.ttf`).then(async (res) => res.arrayBuffer()),
-    fetch(`${NEXT_PUBLIC_WEBAPP_URL()}/fonts/noto-sans.ttf`).then(async (res) => res.arrayBuffer()),
+    fetch(`${NEXT_PRIVATE_INTERNAL_WEBAPP_URL()}/fonts/caveat.ttf`).then(async (res) => res.arrayBuffer()),
+    fetch(`${NEXT_PRIVATE_INTERNAL_WEBAPP_URL()}/fonts/noto-sans.ttf`).then(async (res) => res.arrayBuffer()),
   ]);
 
   const isSignatureField = isSignatureFieldType(field.type);
@@ -63,7 +63,7 @@ export const legacy_insertFieldInPDF = async (pdf: PDFDocument, field: FieldWith
 
   const isPageRotatedToLandscape = pageRotationInDegrees === 90 || pageRotationInDegrees === 270;
 
-  let { width: pageWidth, height: pageHeight } = page.getSize();
+  let { width: pageWidth, height: pageHeight } = getPageSize(page);
 
   // PDFs can have pages that are rotated, which are correctly rendered in the frontend.
   // However when we load the PDF in the backend, the rotation is applied.
@@ -90,13 +90,7 @@ export const legacy_insertFieldInPDF = async (pdf: PDFDocument, field: FieldWith
     let debugY = pageHeight - fieldY - fieldHeight; // Invert Y for PDF coordinates
 
     if (pageRotationInDegrees !== 0) {
-      const adjustedPosition = adjustPositionForRotation(
-        pageWidth,
-        pageHeight,
-        debugX,
-        debugY,
-        pageRotationInDegrees,
-      );
+      const adjustedPosition = adjustPositionForRotation(pageWidth, pageHeight, debugX, debugY, pageRotationInDegrees);
 
       debugX = adjustedPosition.xPos;
       debugY = adjustedPosition.yPos;
@@ -168,9 +162,7 @@ export const legacy_insertFieldInPDF = async (pdf: PDFDocument, field: FieldWith
         } else {
           const signatureText = field.signature?.typedSignature ?? '';
 
-          const longestLineInTextForWidth = signatureText
-            .split('\n')
-            .sort((a, b) => b.length - a.length)[0];
+          const longestLineInTextForWidth = signatureText.split('\n').sort((a, b) => b.length - a.length)[0];
 
           let fontSize = maxFontSize;
           let textWidth = font.widthOfTextAtSize(longestLineInTextForWidth, fontSize);
@@ -309,9 +301,7 @@ export const legacy_insertFieldInPDF = async (pdf: PDFDocument, field: FieldWith
 
       const customFontSize = meta?.success && meta.data.fontSize ? meta.data.fontSize : null;
       const textAlign = meta?.success && meta.data.textAlign ? meta.data.textAlign : 'center';
-      const longestLineInTextForWidth = field.customText
-        .split('\n')
-        .sort((a, b) => b.length - a.length)[0];
+      const longestLineInTextForWidth = field.customText.split('\n').sort((a, b) => b.length - a.length)[0];
 
       let fontSize = customFontSize || maxFontSize;
       let textWidth = font.widthOfTextAtSize(longestLineInTextForWidth, fontSize);
@@ -341,13 +331,7 @@ export const legacy_insertFieldInPDF = async (pdf: PDFDocument, field: FieldWith
       textY = pageHeight - textY - textHeight;
 
       if (pageRotationInDegrees !== 0) {
-        const adjustedPosition = adjustPositionForRotation(
-          pageWidth,
-          pageHeight,
-          textX,
-          textY,
-          pageRotationInDegrees,
-        );
+        const adjustedPosition = adjustPositionForRotation(pageWidth, pageHeight, textX, textY, pageRotationInDegrees);
 
         textX = adjustedPosition.xPos;
         textY = adjustedPosition.yPos;

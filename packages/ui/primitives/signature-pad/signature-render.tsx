@@ -1,12 +1,21 @@
+import { isBase64Image, SIGNATURE_CANVAS_DPI } from '@documenso/lib/constants/signatures';
 import { useEffect, useRef } from 'react';
-
-import { SIGNATURE_CANVAS_DPI, isBase64Image } from '@documenso/lib/constants/signatures';
 
 import { cn } from '../../lib/utils';
 
 export type SignatureRenderProps = {
   className?: string;
   value: string;
+};
+
+const SIGNATURE_FONT_FAMILY = 'Caveat';
+
+const loadTypedSignatureFont = async () => {
+  if (typeof document === 'undefined' || !('fonts' in document)) {
+    return;
+  }
+
+  await document.fonts.load(`18px ${SIGNATURE_FONT_FAMILY}`);
 };
 
 /**
@@ -31,7 +40,7 @@ export const SignatureRender = ({ className, value }: SignatureRenderProps) => {
 
     const canvasWidth = $el.current.width;
     const canvasHeight = $el.current.height;
-    const fontFamily = 'Caveat';
+    const fontFamily = SIGNATURE_FONT_FAMILY;
 
     ctx.clearRect(0, 0, canvasWidth, canvasHeight);
     ctx.textAlign = 'center';
@@ -114,7 +123,17 @@ export const SignatureRender = ({ className, value }: SignatureRenderProps) => {
     if (isBase64Image(value)) {
       renderImageSignature();
     } else {
-      renderTypedSignature();
+      let isCancelled = false;
+
+      void loadTypedSignatureFont().then(() => {
+        if (!isCancelled) {
+          renderTypedSignature();
+        }
+      });
+
+      return () => {
+        isCancelled = true;
+      };
     }
   }, [value]);
 

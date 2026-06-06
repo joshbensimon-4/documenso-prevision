@@ -1,12 +1,3 @@
-import { useMemo } from 'react';
-
-import { msg } from '@lingui/core/macro';
-import { useLingui } from '@lingui/react';
-import { DateTime } from 'luxon';
-import type { DateTimeFormatOptions } from 'luxon';
-import { useSearchParams } from 'react-router';
-import { UAParser } from 'ua-parser-js';
-
 import { useUpdateSearchParams } from '@documenso/lib/client-only/hooks/use-update-search-params';
 import { ZUrlSearchParamsSchema } from '@documenso/lib/types/search-params';
 import { formatDocumentAuditLogAction } from '@documenso/lib/utils/document-audit-logs';
@@ -16,9 +7,18 @@ import { DataTable } from '@documenso/ui/primitives/data-table';
 import { DataTablePagination } from '@documenso/ui/primitives/data-table-pagination';
 import { Skeleton } from '@documenso/ui/primitives/skeleton';
 import { TableCell } from '@documenso/ui/primitives/table';
+import { msg } from '@lingui/core/macro';
+import { useLingui } from '@lingui/react';
+import { Trans } from '@lingui/react/macro';
+import type { DateTimeFormatOptions } from 'luxon';
+import { DateTime } from 'luxon';
+import { useMemo } from 'react';
+import { useSearchParams } from 'react-router';
+import { UAParser } from 'ua-parser-js';
 
 export type DocumentLogsTableProps = {
   documentId: number;
+  userId?: number;
 };
 
 const dateFormat: DateTimeFormatOptions = {
@@ -26,7 +26,7 @@ const dateFormat: DateTimeFormatOptions = {
   hourCycle: 'h12',
 };
 
-export const DocumentLogsTable = ({ documentId }: DocumentLogsTableProps) => {
+export const DocumentLogsTable = ({ documentId, userId }: DocumentLogsTableProps) => {
   const { _, i18n } = useLingui();
 
   const [searchParams] = useSearchParams();
@@ -34,7 +34,7 @@ export const DocumentLogsTable = ({ documentId }: DocumentLogsTableProps) => {
 
   const parsedSearchParams = ZUrlSearchParamsSchema.parse(Object.fromEntries(searchParams ?? []));
 
-  const { data, isLoading, isLoadingError } = trpc.document.findDocumentAuditLogs.useQuery(
+  const { data, isLoading, isLoadingError } = trpc.document.auditLog.find.useQuery(
     {
       documentId,
       page: parsedSearchParams.page,
@@ -87,20 +87,22 @@ export const DocumentLogsTable = ({ documentId }: DocumentLogsTableProps) => {
               )}
             </div>
           ) : (
-            <p>N/A</p>
+            <p>
+              <Trans>N/A</Trans>
+            </p>
           ),
       },
       {
         header: _(msg`Action`),
         accessorKey: 'type',
-        cell: ({ row }) => <span>{formatDocumentAuditLogAction(_, row.original).description}</span>,
+        cell: ({ row }) => <span>{formatDocumentAuditLogAction(i18n, row.original, userId).description}</span>,
       },
       {
-        header: 'IP Address',
+        header: _(msg`IP Address`),
         accessorKey: 'ipAddress',
       },
       {
-        header: 'Browser',
+        header: _(msg`Browser`),
         cell: ({ row }) => {
           if (!row.original.userAgent) {
             return 'N/A';

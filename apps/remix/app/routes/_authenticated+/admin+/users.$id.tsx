@@ -1,41 +1,37 @@
+import { trpc } from '@documenso/trpc/react';
+import type { TGetUserResponse } from '@documenso/trpc/server/admin-router/get-user.types';
+import { ZUpdateUserRequestSchema } from '@documenso/trpc/server/admin-router/update-user.types';
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@documenso/ui/primitives/accordion';
+import { Button } from '@documenso/ui/primitives/button';
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@documenso/ui/primitives/form/form';
+import { Input } from '@documenso/ui/primitives/input';
+import { SpinnerBox } from '@documenso/ui/primitives/spinner';
+import { useToast } from '@documenso/ui/primitives/use-toast';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { msg } from '@lingui/core/macro';
 import { useLingui } from '@lingui/react';
 import { Trans } from '@lingui/react/macro';
 import { useForm } from 'react-hook-form';
-import { useRevalidator } from 'react-router';
+import { Link, useRevalidator } from 'react-router';
 import type { z } from 'zod';
 
-import { trpc } from '@documenso/trpc/react';
-import { ZAdminUpdateProfileMutationSchema } from '@documenso/trpc/server/admin-router/schema';
-import { Button } from '@documenso/ui/primitives/button';
-import {
-  Form,
-  FormControl,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from '@documenso/ui/primitives/form/form';
-import { Input } from '@documenso/ui/primitives/input';
-import { useToast } from '@documenso/ui/primitives/use-toast';
-
+import { AdminOrganisationCreateDialog } from '~/components/dialogs/admin-organisation-create-dialog';
 import { AdminUserDeleteDialog } from '~/components/dialogs/admin-user-delete-dialog';
 import { AdminUserDisableDialog } from '~/components/dialogs/admin-user-disable-dialog';
 import { AdminUserEnableDialog } from '~/components/dialogs/admin-user-enable-dialog';
+import { AdminUserResetTwoFactorDialog } from '~/components/dialogs/admin-user-reset-two-factor-dialog';
+import { GenericErrorLayout } from '~/components/general/generic-error-layout';
+import { AdminOrganisationsTable } from '~/components/tables/admin-organisations-table';
+import { AdminUserTeamsTable } from '~/components/tables/admin-user-teams-table';
 
 import { MultiSelectRoleCombobox } from '../../../components/general/multiselect-role-combobox';
 
-const ZUserFormSchema = ZAdminUpdateProfileMutationSchema.omit({ id: true });
+const ZUserFormSchema = ZUpdateUserRequestSchema.omit({ id: true });
 
 type TUserFormSchema = z.infer<typeof ZUserFormSchema>;
 
 export default function UserPage({ params }: { params: { id: number } }) {
-  const { _ } = useLingui();
-  const { toast } = useToast();
-  const { revalidate } = useRevalidator();
-
-  const { data: user } = trpc.profile.getUser.useQuery(
+  const { data: user, isLoading: isLoadingUser } = trpc.admin.user.get.useQuery(
     {
       id: Number(params.id),
     },
@@ -44,9 +40,44 @@ export default function UserPage({ params }: { params: { id: number } }) {
     },
   );
 
-  const roles = user?.roles ?? [];
+  if (isLoadingUser) {
+    return <SpinnerBox className="py-32" />;
+  }
 
-  const { mutateAsync: updateUserMutation } = trpc.admin.updateUser.useMutation();
+  if (!user) {
+    return (
+      <GenericErrorLayout
+        errorCode={404}
+        errorCodeMap={{
+          404: {
+            heading: msg`User not found`,
+            subHeading: msg`404 User not found`,
+            message: msg`The user you are looking for may have been removed, renamed or may have never existed.`,
+          },
+        }}
+        primaryButton={
+          <Button asChild>
+            <Link to={`/admin/users`}>
+              <Trans>Go back</Trans>
+            </Link>
+          </Button>
+        }
+        secondaryButton={null}
+      />
+    );
+  }
+
+  return <AdminUserPage user={user} />;
+}
+
+const AdminUserPage = ({ user }: { user: TGetUserResponse }) => {
+  const { _ } = useLingui();
+  const { toast } = useToast();
+  const { revalidate } = useRevalidator();
+
+  const roles = user.roles ?? [];
+
+  const { mutateAsync: updateUserMutation } = trpc.admin.user.update.useMutation();
 
   const form = useForm<TUserFormSchema>({
     resolver: zodResolver(ZUserFormSchema),
@@ -84,7 +115,7 @@ export default function UserPage({ params }: { params: { id: number } }) {
 
   return (
     <div>
-      <h2 className="text-4xl font-semibold">
+      <h2 className="font-semibold text-4xl">
         <Trans>Manage {user?.name}'s profile</Trans>
       </h2>
       <Form {...form}>
@@ -131,10 +162,7 @@ export default function UserPage({ params }: { params: { id: number } }) {
                       <Trans>Roles</Trans>
                     </FormLabel>
                     <FormControl>
-                      <MultiSelectRoleCombobox
-                        listValues={roles}
-                        onChange={(values: string[]) => onChange(values)}
-                      />
+                      <MultiSelectRoleCombobox listValues={roles} onChange={(values: string[]) => onChange(values)} />
                     </FormControl>
                     <FormMessage />
                   </fieldset>
@@ -151,13 +179,60 @@ export default function UserPage({ params }: { params: { id: number } }) {
         </form>
       </Form>
 
-      <hr className="my-4" />
+      <hr className="my-8" />
 
-      <div className="flex flex-col items-center gap-4">
-        {user && <AdminUserDeleteDialog user={user} />}
+      <div>
+        <div className="mb-4 flex items-center justify-between">
+          <div>
+            <h3 className="font-semibold text-lg leading-none tracking-tight">
+              <Trans>User Organisations</Trans>
+            </h3>
+            <p className="mt-1.5 text-muted-foreground text-sm">
+              <Trans>Organisations that the user is a member of.</Trans>
+            </p>
+          </div>
+
+          <AdminOrganisationCreateDialog
+            ownerUserId={user.id}
+            trigger={
+              <Button variant="outline" size="sm">
+                <Trans>Create Organisation</Trans>
+              </Button>
+            }
+          />
+        </div>
+
+        <AdminOrganisationsTable memberUserId={user.id} showOwnerColumn={false} hidePaginationUntilOverflow />
+      </div>
+
+      <hr className="my-8" />
+
+      <Accordion type="single" collapsible>
+        <AccordionItem value="team-memberships" className="border-b-0">
+          <AccordionTrigger className="py-0">
+            <div className="text-left">
+              <h3 className="font-semibold text-lg leading-none tracking-tight">
+                <Trans>Team Memberships</Trans>
+              </h3>
+              <p className="mt-1.5 font-normal text-muted-foreground text-sm">
+                <Trans>Teams that this user is a member of and their roles.</Trans>
+              </p>
+            </div>
+          </AccordionTrigger>
+          <AccordionContent>
+            <div className="mt-4">
+              <AdminUserTeamsTable userId={user.id} />
+            </div>
+          </AccordionContent>
+        </AccordionItem>
+      </Accordion>
+
+      <div className="mt-16 flex flex-col gap-4">
+        {user && user.twoFactorEnabled && <AdminUserResetTwoFactorDialog user={user} />}
         {user && user.disabled && <AdminUserEnableDialog userToEnable={user} />}
         {user && !user.disabled && <AdminUserDisableDialog userToDisable={user} />}
+        {user && <AdminUserDeleteDialog user={user} />}
       </div>
     </div>
   );
-}
+};

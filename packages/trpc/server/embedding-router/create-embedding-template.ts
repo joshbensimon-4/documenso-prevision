@@ -1,7 +1,9 @@
 import { AppError, AppErrorCode } from '@documenso/lib/errors/app-error';
 import { verifyEmbeddingPresignToken } from '@documenso/lib/server-only/embedding-presign/verify-embedding-presign-token';
-import { createTemplate } from '@documenso/lib/server-only/template/create-template';
+import { createEnvelope } from '@documenso/lib/server-only/envelope/create-envelope';
+import { mapSecondaryIdToTemplateId } from '@documenso/lib/utils/envelope';
 import { prisma } from '@documenso/prisma';
+import { EnvelopeType } from '@prisma/client';
 
 import { procedure } from '../trpc';
 import {
@@ -9,16 +11,15 @@ import {
   ZCreateEmbeddingTemplateResponseSchema,
 } from './create-embedding-template.types';
 
+// Todo: Envelopes - This only supports V1 documents/templates.
 export const createEmbeddingTemplateRoute = procedure
   .input(ZCreateEmbeddingTemplateRequestSchema)
   .output(ZCreateEmbeddingTemplateResponseSchema)
-  .mutation(async ({ input, ctx: { req } }) => {
+  .mutation(async ({ input, ctx: { req, metadata } }) => {
     try {
       const authorizationHeader = req.headers.get('authorization');
 
-      const [presignToken] = (authorizationHeader || '')
-        .split('Bearer ')
-        .filter((s) => s.length > 0);
+      const [presignToken] = (authorizationHeader || '').split('Bearer ').filter((s) => s.length > 0);
 
       if (!presignToken) {
         throw new AppError(AppErrorCode.UNAUTHORIZED, {
@@ -31,18 +32,30 @@ export const createEmbeddingTemplateRoute = procedure
       const { title, documentDataId, recipients, meta } = input;
 
       // First create the template
-      const template = await createTemplate({
+      const template = await createEnvelope({
+        internalVersion: 1,
         userId: apiToken.userId,
-        title,
-        templateDocumentDataId: documentDataId,
         teamId: apiToken.teamId ?? undefined,
+        data: {
+          type: EnvelopeType.TEMPLATE,
+          title,
+          envelopeItems: [
+            {
+              documentDataId,
+            },
+          ],
+        },
+        meta,
+        requestMetadata: metadata,
       });
+
+      const firstEnvelopeItem = template.envelopeItems[0];
 
       await Promise.all(
         recipients.map(async (recipient) => {
           const createdRecipient = await prisma.recipient.create({
             data: {
-              templateId: template.id,
+              envelopeId: template.id,
               email: recipient.email,
               name: recipient.name || '',
               role: recipient.role || 'SIGNER',
@@ -55,6 +68,8 @@ export const createEmbeddingTemplateRoute = procedure
 
           const createdFields = await prisma.field.createMany({
             data: fields.map((field) => ({
+              envelopeId: template.id,
+              envelopeItemId: firstEnvelopeItem.id,
               recipientId: createdRecipient.id,
               type: field.type,
               page: field.pageNumber,
@@ -64,7 +79,6 @@ export const createEmbeddingTemplateRoute = procedure
               height: field.height,
               customText: '',
               inserted: false,
-              templateId: template.id,
             })),
           });
 
@@ -75,22 +89,6 @@ export const createEmbeddingTemplateRoute = procedure
         }),
       );
 
-      // Update the template meta if needed
-      if (meta) {
-        await prisma.templateMeta.upsert({
-          where: {
-            templateId: template.id,
-          },
-          create: {
-            templateId: template.id,
-            ...meta,
-          },
-          update: {
-            ...meta,
-          },
-        });
-      }
-
       if (!template.id) {
         throw new AppError(AppErrorCode.UNKNOWN_ERROR, {
           message: 'Failed to create template: missing template ID',
@@ -98,7 +96,7 @@ export const createEmbeddingTemplateRoute = procedure
       }
 
       return {
-        templateId: template.id,
+        templateId: mapSecondaryIdToTemplateId(template.secondaryId),
       };
     } catch (error) {
       if (error instanceof AppError) {

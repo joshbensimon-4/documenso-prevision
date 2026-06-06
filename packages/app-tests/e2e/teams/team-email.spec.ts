@@ -1,17 +1,17 @@
+import { NEXT_PUBLIC_WEBAPP_URL } from '@documenso/lib/constants/app';
+import { seedTeamEmailVerification } from '@documenso/prisma/seed/teams';
+import { seedUser } from '@documenso/prisma/seed/users';
 import { expect, test } from '@playwright/test';
 
-import { NEXT_PUBLIC_WEBAPP_URL } from '@documenso/lib/constants/app';
-import { seedTeam, seedTeamEmailVerification } from '@documenso/prisma/seed/teams';
-import { seedUser } from '@documenso/prisma/seed/users';
-
 import { apiSignin } from '../fixtures/authentication';
+import { openDropdownMenu } from '../fixtures/generic';
 
 test('[TEAMS]: send team email request', async ({ page }) => {
-  const team = await seedTeam();
+  const { user, team } = await seedUser();
 
   await apiSignin({
     page,
-    email: team.owner.email,
+    email: user.email,
     password: 'password',
     redirectPath: `/t/${team.url}/settings`,
   });
@@ -24,17 +24,12 @@ test('[TEAMS]: send team email request', async ({ page }) => {
   await page.getByRole('button', { name: 'Add' }).click();
 
   await expect(
-    page
-      .getByRole('status')
-      .filter({ hasText: 'We have sent a confirmation email for verification.' })
-      .first(),
+    page.getByRole('status').filter({ hasText: 'We have sent a confirmation email for verification.' }).first(),
   ).toBeVisible();
 });
 
 test('[TEAMS]: accept team email request', async ({ page }) => {
-  const team = await seedTeam({
-    createTeamMembers: 1,
-  });
+  const { user, team } = await seedUser();
 
   const teamEmailVerification = await seedTeamEmailVerification({
     email: `team-email-verification--${team.url}@test.documenso.com`,
@@ -46,19 +41,20 @@ test('[TEAMS]: accept team email request', async ({ page }) => {
 });
 
 test('[TEAMS]: delete team email', async ({ page }) => {
-  const team = await seedTeam({
-    createTeamMembers: 1,
-    createTeamEmail: true,
+  const { user, team } = await seedUser({
+    setTeamEmailAsOwner: true,
   });
 
   await apiSignin({
     page,
-    email: team.owner.email,
+    email: user.email,
     redirectPath: `/t/${team.url}/settings`,
   });
 
-  await page.locator('section div').filter({ hasText: 'Team email' }).getByRole('button').click();
+  const settingsBtn = page.locator('section div').filter({ hasText: 'Team email' }).getByRole('button');
+  await openDropdownMenu(page, settingsBtn);
 
+  await expect(page.getByRole('menuitem', { name: 'Remove' })).toBeVisible();
   await page.getByRole('menuitem', { name: 'Remove' }).click();
   await page.getByRole('button', { name: 'Remove' }).click();
 
@@ -66,23 +62,16 @@ test('[TEAMS]: delete team email', async ({ page }) => {
 });
 
 test('[TEAMS]: team email owner removes access', async ({ page }) => {
-  const team = await seedTeam({
-    createTeamMembers: 1,
-    createTeamEmail: true,
-  });
+  const teamEmailOwner = await seedUser();
 
-  if (!team.teamEmail) {
-    throw new Error('Not possible');
-  }
-
-  const teamEmailOwner = await seedUser({
-    email: team.teamEmail.email,
+  const { user: secondUser } = await seedUser({
+    teamEmail: teamEmailOwner.user.email,
   });
 
   await apiSignin({
     page,
-    email: teamEmailOwner.email,
-    redirectPath: `/settings/teams`,
+    email: teamEmailOwner.user.email,
+    redirectPath: `/settings/profile`,
   });
 
   await page.getByRole('button', { name: 'Revoke access' }).click();

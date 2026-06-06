@@ -10,6 +10,7 @@ import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import handle from 'hono-react-router-adapter/node';
 
+import { getLoadContext } from './hono/server/load-context.js';
 import server from './hono/server/router.js';
 import * as build from './index.js';
 
@@ -17,7 +18,7 @@ server.use(
   serveStatic({
     root: 'build/client',
     onFound: (path, c) => {
-      if (path.startsWith('./build/client/assets')) {
+      if (path.startsWith('build/client/assets')) {
         // Hard cache assets with hashed file names.
         c.header('Cache-Control', 'public, immutable, max-age=31536000');
       } else {
@@ -28,6 +29,11 @@ server.use(
   }),
 );
 
-const handler = handle(build, server);
+const handler = handle(build, server, { getLoadContext });
 
-serve({ fetch: handler.fetch, port: 3000 });
+const port = parseInt(process.env.PORT || '3000', 10);
+const hostname = process.env.HOSTNAME || '0.0.0.0';
+
+serve({ fetch: handler.fetch, port, hostname }, (info) => {
+  console.log(`Server listening on ${info.address}:${info.port}`);
+});

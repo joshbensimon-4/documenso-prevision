@@ -1,15 +1,3 @@
-import { useEffect } from 'react';
-
-import { zodResolver } from '@hookform/resolvers/zod';
-import { msg } from '@lingui/core/macro';
-import { useLingui } from '@lingui/react';
-import { Trans } from '@lingui/react/macro';
-import type * as DialogPrimitive from '@radix-ui/react-dialog';
-import { FolderIcon, HomeIcon, Loader2 } from 'lucide-react';
-import { useForm } from 'react-hook-form';
-import { useNavigate } from 'react-router';
-import { z } from 'zod';
-
 import { AppError, AppErrorCode } from '@documenso/lib/errors/app-error';
 import { FolderType } from '@documenso/lib/types/folder-type';
 import { formatTemplatesPath } from '@documenso/lib/utils/teams';
@@ -23,17 +11,21 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@documenso/ui/primitives/dialog';
-import {
-  Form,
-  FormControl,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from '@documenso/ui/primitives/form/form';
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@documenso/ui/primitives/form/form';
+import { Input } from '@documenso/ui/primitives/input';
 import { useToast } from '@documenso/ui/primitives/use-toast';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { msg } from '@lingui/core/macro';
+import { useLingui } from '@lingui/react';
+import { Trans } from '@lingui/react/macro';
+import type * as DialogPrimitive from '@radix-ui/react-dialog';
+import { FolderIcon, HomeIcon, Loader2, Search } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { useForm } from 'react-hook-form';
+import { useNavigate } from 'react-router';
+import { z } from 'zod';
 
-import { useOptionalCurrentTeam } from '~/providers/team';
+import { useCurrentTeam } from '~/providers/team';
 
 export type TemplateMoveToFolderDialogProps = {
   templateId: number;
@@ -59,8 +51,11 @@ export function TemplateMoveToFolderDialog({
 }: TemplateMoveToFolderDialogProps) {
   const { _ } = useLingui();
   const { toast } = useToast();
+
   const navigate = useNavigate();
-  const team = useOptionalCurrentTeam();
+  const team = useCurrentTeam();
+
+  const [searchTerm, setSearchTerm] = useState('');
 
   const form = useForm<TMoveTemplateFormSchema>({
     resolver: zodResolver(ZMoveTemplateFormSchema),
@@ -69,7 +64,7 @@ export function TemplateMoveToFolderDialog({
     },
   });
 
-  const { data: folders, isLoading: isFoldersLoading } = trpc.folder.findFolders.useQuery(
+  const { data: folders, isLoading: isFoldersLoading } = trpc.folder.findFoldersInternal.useQuery(
     {
       parentId: currentFolderId ?? null,
       type: FolderType.TEMPLATE,
@@ -79,11 +74,12 @@ export function TemplateMoveToFolderDialog({
     },
   );
 
-  const { mutateAsync: moveTemplateToFolder } = trpc.folder.moveTemplateToFolder.useMutation();
+  const { mutateAsync: updateTemplate } = trpc.template.updateTemplate.useMutation();
 
   useEffect(() => {
     if (!isOpen) {
       form.reset();
+      setSearchTerm('');
     } else {
       form.reset({ folderId: currentFolderId ?? null });
     }
@@ -91,9 +87,11 @@ export function TemplateMoveToFolderDialog({
 
   const onSubmit = async (data: TMoveTemplateFormSchema) => {
     try {
-      await moveTemplateToFolder({
+      await updateTemplate({
         templateId,
-        folderId: data.folderId ?? null,
+        data: {
+          folderId: data.folderId ?? null,
+        },
       });
 
       toast({
@@ -104,7 +102,7 @@ export function TemplateMoveToFolderDialog({
 
       onOpenChange(false);
 
-      const templatesPath = formatTemplatesPath(team?.url);
+      const templatesPath = formatTemplatesPath(team.url);
 
       if (data.folderId) {
         void navigate(`${templatesPath}/f/${data.folderId}`);
@@ -132,6 +130,10 @@ export function TemplateMoveToFolderDialog({
     }
   };
 
+  const filteredFolders = folders?.data?.filter((folder) =>
+    folder.name.toLowerCase().includes(searchTerm.toLowerCase()),
+  );
+
   return (
     <Dialog {...props} open={isOpen} onOpenChange={onOpenChange}>
       <DialogContent>
@@ -145,6 +147,16 @@ export function TemplateMoveToFolderDialog({
           </DialogDescription>
         </DialogHeader>
 
+        <div className="relative">
+          <Search className="absolute top-3 left-2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder={_(msg`Search folders...`)}
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="pl-8"
+          />
+        </div>
+
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="mt-4 flex flex-col gap-y-4">
             <FormField
@@ -155,8 +167,9 @@ export function TemplateMoveToFolderDialog({
                   <FormLabel>
                     <Trans>Folder</Trans>
                   </FormLabel>
+
                   <FormControl>
-                    <div className="space-y-2">
+                    <div className="max-h-96 space-y-2 overflow-y-auto">
                       {isFoldersLoading ? (
                         <div className="flex h-10 items-center justify-center">
                           <Loader2 className="h-4 w-4 animate-spin" />
@@ -171,10 +184,10 @@ export function TemplateMoveToFolderDialog({
                             disabled={currentFolderId === null}
                           >
                             <HomeIcon className="mr-2 h-4 w-4" />
-                            <Trans>Root (No Folder)</Trans>
+                            <Trans>Home (No Folder)</Trans>
                           </Button>
 
-                          {folders?.data?.map((folder) => (
+                          {filteredFolders?.map((folder) => (
                             <Button
                               key={folder.id}
                               type="button"
@@ -187,6 +200,12 @@ export function TemplateMoveToFolderDialog({
                               {folder.name}
                             </Button>
                           ))}
+
+                          {searchTerm && filteredFolders?.length === 0 && (
+                            <div className="px-2 py-2 text-center text-muted-foreground text-sm">
+                              <Trans>No folders found</Trans>
+                            </div>
+                          )}
                         </>
                       )}
                     </div>

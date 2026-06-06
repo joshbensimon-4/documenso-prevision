@@ -1,8 +1,3 @@
-import { createContext, useContext, useEffect, useMemo, useState } from 'react';
-
-import { type Document, FieldType, type Passkey, type Recipient } from '@prisma/client';
-import { match } from 'ts-pattern';
-
 import type { SessionUser } from '@documenso/auth/server/lib/session/session';
 import { MAXIMUM_PASSKEYS } from '@documenso/lib/constants/auth';
 import type {
@@ -14,6 +9,8 @@ import type {
 import { DocumentAuth } from '@documenso/lib/types/document-auth';
 import { extractDocumentAuthMethods } from '@documenso/lib/utils/document-auth';
 import { trpc } from '@documenso/trpc/react';
+import { type Envelope, FieldType, type Passkey, type Recipient } from '@prisma/client';
+import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 
 import type { DocumentSigningAuthDialogProps } from './document-signing-auth-dialog';
 import { DocumentSigningAuthDialog } from './document-signing-auth-dialog';
@@ -25,17 +22,20 @@ type PasskeyData = {
   isError: boolean;
 };
 
+type SigningAuthRecipient = Pick<Recipient, 'authOptions' | 'email' | 'role' | 'name' | 'token' | 'id'>;
+
 export type DocumentSigningAuthContextValue = {
   executeActionAuthProcedure: (_value: ExecuteActionAuthProcedureOptions) => Promise<void>;
-  documentAuthOptions: Document['authOptions'];
+  documentAuthOptions: Envelope['authOptions'];
   documentAuthOption: TDocumentAuthOptions;
-  setDocumentAuthOptions: (_value: Document['authOptions']) => void;
-  recipient: Recipient;
+  setDocumentAuthOptions: (_value: Envelope['authOptions']) => void;
+  recipient: SigningAuthRecipient;
   recipientAuthOption: TRecipientAuthOptions;
-  setRecipient: (_value: Recipient) => void;
-  derivedRecipientAccessAuth: TRecipientAccessAuthTypes | null;
-  derivedRecipientActionAuth: TRecipientActionAuthTypes | null;
+  setRecipient: (_value: SigningAuthRecipient) => void;
+  derivedRecipientAccessAuth: TRecipientAccessAuthTypes[];
+  derivedRecipientActionAuth: TRecipientActionAuthTypes[];
   isAuthRedirectRequired: boolean;
+  isDirectTemplate?: boolean;
   isCurrentlyAuthenticating: boolean;
   setIsCurrentlyAuthenticating: (_value: boolean) => void;
   passkeyData: PasskeyData;
@@ -62,8 +62,9 @@ export const useRequiredDocumentSigningAuthContext = () => {
 };
 
 export interface DocumentSigningAuthProviderProps {
-  documentAuthOptions: Document['authOptions'];
-  recipient: Recipient;
+  documentAuthOptions: Envelope['authOptions'];
+  recipient: SigningAuthRecipient;
+  isDirectTemplate?: boolean;
   user?: SessionUser | null;
   children: React.ReactNode;
 }
@@ -71,6 +72,7 @@ export interface DocumentSigningAuthProviderProps {
 export const DocumentSigningAuthProvider = ({
   documentAuthOptions: initialDocumentAuthOptions,
   recipient: initialRecipient,
+  isDirectTemplate = false,
   user,
   children,
 }: DocumentSigningAuthProviderProps) => {
@@ -80,12 +82,7 @@ export const DocumentSigningAuthProvider = ({
   const [isCurrentlyAuthenticating, setIsCurrentlyAuthenticating] = useState(false);
   const [preferredPasskeyId, setPreferredPasskeyId] = useState<string | null>(null);
 
-  const {
-    documentAuthOption,
-    recipientAuthOption,
-    derivedRecipientAccessAuth,
-    derivedRecipientActionAuth,
-  } = useMemo(
+  const { documentAuthOption, recipientAuthOption, derivedRecipientAccessAuth, derivedRecipientActionAuth } = useMemo(
     () =>
       extractDocumentAuthMethods({
         documentAuth: documentAuthOptions,
@@ -94,13 +91,13 @@ export const DocumentSigningAuthProvider = ({
     [documentAuthOptions, recipient],
   );
 
-  const passkeyQuery = trpc.auth.findPasskeys.useQuery(
+  const passkeyQuery = trpc.auth.passkey.find.useQuery(
     {
       perPage: MAXIMUM_PASSKEYS,
     },
     {
       placeholderData: (previousData) => previousData,
-      enabled: derivedRecipientActionAuth === DocumentAuth.PASSKEY,
+      enabled: derivedRecipientActionAuth?.includes(DocumentAuth.PASSKEY) ?? false,
     },
   );
 
@@ -111,8 +108,9 @@ export const DocumentSigningAuthProvider = ({
     isError: passkeyQuery.isError,
   };
 
-  const [documentAuthDialogPayload, setDocumentAuthDialogPayload] =
-    useState<ExecuteActionAuthProcedureOptions | null>(null);
+  const [documentAuthDialogPayload, setDocumentAuthDialogPayload] = useState<ExecuteActionAuthProcedureOptions | null>(
+    null,
+  );
 
   /**
    * The pre calculated auth payload if the current user is authenticated correctly
@@ -121,21 +119,25 @@ export const DocumentSigningAuthProvider = ({
    * Will be `null` if the user still requires authentication, or if they don't need
    * authentication.
    */
-  const preCalculatedActionAuthOptions = match(derivedRecipientActionAuth)
-    .with(DocumentAuth.ACCOUNT, () => {
-      if (recipient.email !== user?.email) {
-        return null;
-      }
+  const preCalculatedActionAuthOptions = useMemo(() => {
+    if (
+      !derivedRecipientActionAuth ||
+      derivedRecipientActionAuth.length === 0 ||
+      derivedRecipientActionAuth.includes(DocumentAuth.EXPLICIT_NONE)
+    ) {
+      return {
+        type: DocumentAuth.EXPLICIT_NONE,
+      };
+    }
 
+    if (derivedRecipientActionAuth.includes(DocumentAuth.ACCOUNT) && user?.email === recipient.email) {
       return {
         type: DocumentAuth.ACCOUNT,
       };
-    })
-    .with(DocumentAuth.EXPLICIT_NONE, () => ({
-      type: DocumentAuth.EXPLICIT_NONE,
-    }))
-    .with(DocumentAuth.PASSKEY, DocumentAuth.TWO_FACTOR_AUTH, null, () => null)
-    .exhaustive();
+    }
+
+    return null;
+  }, [derivedRecipientActionAuth, user, recipient]);
 
   const executeActionAuthProcedure = async (options: ExecuteActionAuthProcedureOptions) => {
     // Directly run callback if no auth required.
@@ -170,7 +172,8 @@ export const DocumentSigningAuthProvider = ({
   // Assume that a user must be logged in for any auth requirements.
   const isAuthRedirectRequired = Boolean(
     derivedRecipientActionAuth &&
-      derivedRecipientActionAuth !== DocumentAuth.EXPLICIT_NONE &&
+      derivedRecipientActionAuth.length > 0 &&
+      !derivedRecipientActionAuth.includes(DocumentAuth.EXPLICIT_NONE) &&
       user?.email !== recipient.email,
   );
 
@@ -192,6 +195,7 @@ export const DocumentSigningAuthProvider = ({
         derivedRecipientAccessAuth,
         derivedRecipientActionAuth,
         isAuthRedirectRequired,
+        isDirectTemplate,
         isCurrentlyAuthenticating,
         setIsCurrentlyAuthenticating,
         passkeyData,
@@ -208,7 +212,7 @@ export const DocumentSigningAuthProvider = ({
           onOpenChange={() => setDocumentAuthDialogPayload(null)}
           onReauthFormSubmit={documentAuthDialogPayload.onReauthFormSubmit}
           actionTarget={documentAuthDialogPayload.actionTarget}
-          documentAuthType={derivedRecipientActionAuth}
+          availableAuthTypes={derivedRecipientActionAuth}
         />
       )}
     </DocumentSigningAuthContext.Provider>
@@ -217,7 +221,7 @@ export const DocumentSigningAuthProvider = ({
 
 type ExecuteActionAuthProcedureOptions = Omit<
   DocumentSigningAuthDialogProps,
-  'open' | 'onOpenChange' | 'documentAuthType' | 'recipientRole'
+  'open' | 'onOpenChange' | 'documentAuthType' | 'recipientRole' | 'availableAuthTypes'
 >;
 
 DocumentSigningAuthProvider.displayName = 'DocumentSigningAuthProvider';

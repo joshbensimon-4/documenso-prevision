@@ -1,3 +1,11 @@
+import { NEXT_PUBLIC_WEBAPP_URL } from '@documenso/lib/constants/app';
+import { AppError, AppErrorCode } from '@documenso/lib/errors/app-error';
+import { trpc } from '@documenso/trpc/react';
+import { ZUpdateTeamRequestSchema } from '@documenso/trpc/server/team-router/update-team.types';
+import { Button } from '@documenso/ui/primitives/button';
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@documenso/ui/primitives/form/form';
+import { Input } from '@documenso/ui/primitives/input';
+import { useToast } from '@documenso/ui/primitives/use-toast';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { msg } from '@lingui/core/macro';
 import { useLingui } from '@lingui/react';
@@ -7,29 +15,13 @@ import { useForm } from 'react-hook-form';
 import { useNavigate } from 'react-router';
 import type { z } from 'zod';
 
-import { NEXT_PUBLIC_WEBAPP_URL } from '@documenso/lib/constants/app';
-import { AppError, AppErrorCode } from '@documenso/lib/errors/app-error';
-import { trpc } from '@documenso/trpc/react';
-import { ZUpdateTeamMutationSchema } from '@documenso/trpc/server/team-router/schema';
-import { Button } from '@documenso/ui/primitives/button';
-import {
-  Form,
-  FormControl,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from '@documenso/ui/primitives/form/form';
-import { Input } from '@documenso/ui/primitives/input';
-import { useToast } from '@documenso/ui/primitives/use-toast';
-
 export type UpdateTeamDialogProps = {
   teamId: number;
   teamName: string;
   teamUrl: string;
 };
 
-const ZTeamUpdateFormSchema = ZUpdateTeamMutationSchema.shape.data.pick({
+const ZTeamUpdateFormSchema = ZUpdateTeamRequestSchema.shape.data.pick({
   name: true,
   url: true,
 });
@@ -49,7 +41,7 @@ export const TeamUpdateForm = ({ teamId, teamName, teamUrl }: UpdateTeamDialogPr
     },
   });
 
-  const { mutateAsync: updateTeam } = trpc.team.updateTeam.useMutation();
+  const { mutateAsync: updateTeam } = trpc.team.update.useMutation();
 
   const onFormSubmit = async ({ name, url }: TTeamUpdateFormSchema) => {
     try {
@@ -129,7 +121,7 @@ export const TeamUpdateForm = ({ teamId, teamName, teamUrl }: UpdateTeamDialogPr
                   <Input className="bg-background" {...field} />
                 </FormControl>
                 {!form.formState.errors.url && (
-                  <span className="text-foreground/50 text-xs font-normal">
+                  <span className="font-normal text-foreground/50 text-xs">
                     {field.value ? (
                       `${NEXT_PUBLIC_WEBAPP_URL()}/t/${field.value}`
                     ) : (

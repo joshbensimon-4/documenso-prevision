@@ -1,12 +1,13 @@
-import { type HTMLAttributes, useEffect, useState } from 'react';
-
-import { MenuIcon, SearchIcon } from 'lucide-react';
-import { Link, useLocation, useParams } from 'react-router';
-
-import type { SessionUser } from '@documenso/auth/server/lib/session/session';
-import type { TGetTeamsResponse } from '@documenso/lib/server-only/team/get-teams';
+import { useSession } from '@documenso/lib/client-only/providers/session';
+import { isPersonalLayout } from '@documenso/lib/utils/organisations';
 import { getRootHref } from '@documenso/lib/utils/params';
+import { trpc } from '@documenso/trpc/react';
 import { cn } from '@documenso/ui/lib/utils';
+import { Button } from '@documenso/ui/primitives/button';
+import { ReadStatus } from '@prisma/client';
+import { InboxIcon, MenuIcon, SearchIcon } from 'lucide-react';
+import { type HTMLAttributes, useEffect, useState } from 'react';
+import { Link, useParams } from 'react-router';
 
 import { BrandingLogo } from '~/components/general/branding-logo';
 
@@ -14,19 +15,27 @@ import { AppCommandMenu } from './app-command-menu';
 import { AppNavDesktop } from './app-nav-desktop';
 import { AppNavMobile } from './app-nav-mobile';
 import { MenuSwitcher } from './menu-switcher';
+import { OrgMenuSwitcher } from './org-menu-switcher';
 
-export type HeaderProps = HTMLAttributes<HTMLDivElement> & {
-  user: SessionUser;
-  teams: TGetTeamsResponse;
-};
+export type HeaderProps = HTMLAttributes<HTMLDivElement>;
 
-export const Header = ({ className, user, teams, ...props }: HeaderProps) => {
+export const Header = ({ className, ...props }: HeaderProps) => {
   const params = useParams();
-  const { pathname } = useLocation();
+
+  const { organisations } = useSession();
 
   const [isCommandMenuOpen, setIsCommandMenuOpen] = useState(false);
   const [isHamburgerMenuOpen, setIsHamburgerMenuOpen] = useState(false);
   const [scrollY, setScrollY] = useState(0);
+
+  const { data: unreadCountData } = trpc.document.inbox.getCount.useQuery(
+    {
+      readStatus: ReadStatus.NOT_OPENED,
+    },
+    {
+      // refetchInterval: 30000, // Refetch every 30 seconds
+    },
+  );
 
   useEffect(() => {
     const onScroll = () => {
@@ -38,20 +47,10 @@ export const Header = ({ className, user, teams, ...props }: HeaderProps) => {
     return () => window.removeEventListener('scroll', onScroll);
   }, []);
 
-  const isPathTeamUrl = (teamUrl: string) => {
-    if (!pathname || !pathname.startsWith(`/t/`)) {
-      return false;
-    }
-
-    return pathname.split('/')[2] === teamUrl;
-  };
-
-  const selectedTeam = teams?.find((team) => isPathTeamUrl(team.url));
-
   return (
     <header
       className={cn(
-        'supports-backdrop-blur:bg-background/60 bg-background/95 sticky top-0 z-[60] flex h-16 w-full items-center border-b border-b-transparent backdrop-blur duration-200',
+        'sticky top-0 z-[60] flex h-16 w-full items-center border-b border-b-transparent bg-background/95 backdrop-blur duration-200 supports-backdrop-blur:bg-background/60',
         scrollY > 5 && 'border-b-border',
         className,
       )}
@@ -59,36 +58,40 @@ export const Header = ({ className, user, teams, ...props }: HeaderProps) => {
     >
       <div className="mx-auto flex w-full max-w-screen-xl items-center justify-between gap-x-4 px-4 md:justify-normal md:px-8">
         <Link
-          to={`${getRootHref(params, { returnEmptyRootString: true })}/documents`}
-          className="focus-visible:ring-ring ring-offset-background flex rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
+          to={getRootHref(params)}
+          className="hidden rounded-md ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 md:inline"
         >
-          <BrandingLogo className="text-foreground h-8 w-auto md:h-10" />
+          <BrandingLogo className="h-10 w-auto" />
         </Link>
 
         <AppNavDesktop setIsCommandMenuOpen={setIsCommandMenuOpen} />
 
-        <div
-          className="flex gap-x-4 md:ml-8"
-          title={selectedTeam ? selectedTeam.name : (user.name ?? '')}
-        >
-          <MenuSwitcher user={user} teams={teams} />
-        </div>
+        <Button asChild variant="outline" className="relative hidden h-10 w-10 rounded-lg md:flex">
+          <Link to="/inbox" className="relative block h-10 w-10">
+            <InboxIcon className="h-5 w-5 flex-shrink-0 text-muted-foreground transition-colors hover:text-foreground" />
+
+            {unreadCountData && unreadCountData.count > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-primary font-semibold text-[10px] text-primary-foreground">
+                {unreadCountData.count > 99 ? '99+' : unreadCountData.count}
+              </span>
+            )}
+          </Link>
+        </Button>
+
+        <div className="md:ml-4">{isPersonalLayout(organisations) ? <MenuSwitcher /> : <OrgMenuSwitcher />}</div>
 
         <div className="flex flex-row items-center space-x-4 md:hidden">
           <button onClick={() => setIsCommandMenuOpen(true)}>
-            <SearchIcon className="text-muted-foreground h-6 w-6" />
+            <SearchIcon className="h-6 w-6 text-muted-foreground" />
           </button>
 
           <button onClick={() => setIsHamburgerMenuOpen(true)}>
-            <MenuIcon className="text-muted-foreground h-6 w-6" />
+            <MenuIcon className="h-6 w-6 text-muted-foreground" />
           </button>
 
           <AppCommandMenu open={isCommandMenuOpen} onOpenChange={setIsCommandMenuOpen} />
 
-          <AppNavMobile
-            isMenuOpen={isHamburgerMenuOpen}
-            onMenuOpenChange={setIsHamburgerMenuOpen}
-          />
+          <AppNavMobile isMenuOpen={isHamburgerMenuOpen} onMenuOpenChange={setIsHamburgerMenuOpen} />
         </div>
       </div>
     </header>

@@ -1,44 +1,37 @@
 import { prisma } from '@documenso/prisma';
+import { EnvelopeType } from '@prisma/client';
 
 import { AppError, AppErrorCode } from '../../errors/app-error';
+import type { EnvelopeIdOptions } from '../../utils/envelope';
+import { mapSecondaryIdToTemplateId } from '../../utils/envelope';
+import { getEnvelopeWhereInput } from '../envelope/get-envelope-by-id';
 
 export type GetTemplateByIdOptions = {
-  id: number;
+  id: EnvelopeIdOptions;
   userId: number;
-  teamId?: number;
-  folderId?: string | null;
+  teamId: number;
 };
 
-export const getTemplateById = async ({
-  id,
-  userId,
-  teamId,
-  folderId = null,
-}: GetTemplateByIdOptions) => {
-  const template = await prisma.template.findFirst({
-    where: {
-      id,
-      ...(teamId
-        ? {
-            team: {
-              id: teamId,
-              members: {
-                some: {
-                  userId,
-                },
-              },
-            },
-          }
-        : {
-            userId,
-            teamId: null,
-          }),
-      ...(folderId ? { folderId } : {}),
-    },
+export const getTemplateById = async ({ id, userId, teamId }: GetTemplateByIdOptions) => {
+  const { envelopeWhereInput } = await getEnvelopeWhereInput({
+    id,
+    type: EnvelopeType.TEMPLATE,
+    userId,
+    teamId,
+  });
+
+  const envelope = await prisma.envelope.findFirst({
+    where: envelopeWhereInput,
     include: {
       directLink: true,
-      templateDocumentData: true,
-      templateMeta: true,
+      documentMeta: true,
+      envelopeItems: {
+        select: {
+          id: true,
+          envelopeId: true,
+          documentData: true,
+        },
+      },
       recipients: true,
       fields: true,
       user: {
@@ -52,11 +45,58 @@ export const getTemplateById = async ({
     },
   });
 
-  if (!template) {
+  if (!envelope) {
     throw new AppError(AppErrorCode.NOT_FOUND, {
       message: 'Template not found',
     });
   }
 
-  return template;
+  const firstTemplateDocumentData = envelope.envelopeItems[0].documentData;
+
+  if (!firstTemplateDocumentData) {
+    throw new AppError(AppErrorCode.NOT_FOUND, {
+      message: 'Template document data not found',
+    });
+  }
+
+  // eslint-disable-next-line unused-imports/no-unused-vars
+  const { envelopeItems, documentMeta, ...rest } = envelope;
+
+  const legacyTemplateId = mapSecondaryIdToTemplateId(envelope.secondaryId);
+
+  return {
+    ...rest,
+    envelopeId: envelope.id,
+    type: envelope.templateType,
+    templateDocumentDataId: firstTemplateDocumentData.id,
+    templateDocumentData: {
+      ...firstTemplateDocumentData,
+      envelopeItemId: envelope.envelopeItems[0].id,
+    },
+    templateMeta: {
+      ...envelope.documentMeta,
+      templateId: legacyTemplateId,
+    },
+    fields: envelope.fields.map((field) => ({
+      ...field,
+      documentId: null,
+      templateId: legacyTemplateId,
+    })),
+    recipients: envelope.recipients.map((recipient) => ({
+      ...recipient,
+      documentId: null,
+      templateId: legacyTemplateId,
+    })),
+    directLink: envelope.directLink
+      ? {
+          ...envelope.directLink,
+          templateId: legacyTemplateId,
+        }
+      : null,
+    id: mapSecondaryIdToTemplateId(envelope.secondaryId),
+    envelopeItems: envelope.envelopeItems.map((envelopeItem) => ({
+      id: envelopeItem.id,
+      envelopeId: envelopeItem.envelopeId,
+    })),
+  };
 };

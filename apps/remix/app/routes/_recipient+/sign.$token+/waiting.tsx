@@ -1,15 +1,18 @@
-import { Trans } from '@lingui/react/macro';
-import type { Team } from '@prisma/client';
-import { DocumentStatus } from '@prisma/client';
-import { Link, redirect } from 'react-router';
-
 import { getOptionalSession } from '@documenso/auth/server/lib/utils/get-session';
-import { getDocumentById } from '@documenso/lib/server-only/document/get-document-by-id';
+import { loadRecipientBrandingByTeamId } from '@documenso/lib/server-only/branding/load-recipient-branding';
 import { getDocumentAndSenderByToken } from '@documenso/lib/server-only/document/get-document-by-token';
+import { getEnvelopeById } from '@documenso/lib/server-only/envelope/get-envelope-by-id';
 import { getRecipientByToken } from '@documenso/lib/server-only/recipient/get-recipient-by-token';
 import { getTeamById } from '@documenso/lib/server-only/team/get-team';
 import { formatDocumentsPath } from '@documenso/lib/utils/teams';
 import { Button } from '@documenso/ui/primitives/button';
+import { Trans } from '@lingui/react/macro';
+import type { Team } from '@prisma/client';
+import { DocumentStatus, EnvelopeType } from '@prisma/client';
+import { Link, redirect } from 'react-router';
+
+import { RecipientBranding } from '~/components/general/recipient-branding';
+import { useCspNonce } from '~/utils/nonce';
 
 import type { Route } from './+types/waiting';
 
@@ -40,12 +43,16 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   let team: Team | null = null;
 
   if (user) {
-    isOwnerOrTeamMember = await getDocumentById({
-      documentId: document.id,
+    isOwnerOrTeamMember = await getEnvelopeById({
+      id: {
+        type: 'documentId',
+        id: document.id,
+      },
+      type: EnvelopeType.DOCUMENT,
       userId: user.id,
       teamId: document.teamId ?? undefined,
     })
-      .then((document) => !!document)
+      .then((envelope) => !!envelope)
       .catch(() => false);
 
     if (document.teamId) {
@@ -56,50 +63,57 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     }
   }
 
-  const documentPathForEditing = isOwnerOrTeamMember
-    ? formatDocumentsPath(team?.url) + '/' + document.id
-    : null;
+  const documentPathForEditing = isOwnerOrTeamMember && team ? formatDocumentsPath(team.url) + '/' + document.id : null;
+
+  const branding = await loadRecipientBrandingByTeamId({ teamId: document.teamId });
 
   return {
     documentPathForEditing,
+    branding,
   };
 }
 
 export default function WaitingForTurnToSignPage({ loaderData }: Route.ComponentProps) {
-  const { documentPathForEditing } = loaderData;
+  const { documentPathForEditing, branding } = loaderData;
+  const cspNonce = useCspNonce();
 
   return (
-    <div className="relative flex flex-col items-center justify-center px-4 py-12 sm:px-6 lg:px-8">
-      <div className="w-full max-w-md text-center">
-        <h2 className="tracking-tigh text-3xl font-bold">
-          <Trans>Waiting for Your Turn</Trans>
-        </h2>
+    <>
+      <RecipientBranding branding={branding} cspNonce={cspNonce} />
+      <div className="relative flex flex-col items-center justify-center px-4 py-12 sm:px-6 lg:px-8">
+        <div className="w-full max-w-md text-center">
+          <h2 className="font-bold text-3xl tracking-tigh">
+            <Trans>Waiting for Your Turn</Trans>
+          </h2>
 
-        <p className="text-muted-foreground mt-2 text-sm">
-          <Trans>
-            It's currently not your turn to sign. You will receive an email with instructions once
-            it's your turn to sign the document.
-          </Trans>
-        </p>
+          <p className="mt-2 text-muted-foreground text-sm">
+            <Trans>
+              It's currently not your turn to sign. You will receive an email with instructions once it's your turn to
+              sign the document.
+            </Trans>
+          </p>
 
-        <p className="text-muted-foreground mt-4 text-sm">
-          <Trans>Please check your email for updates.</Trans>
-        </p>
+          <p className="mt-4 text-muted-foreground text-sm">
+            <Trans>Please check your email for updates.</Trans>
+          </p>
 
-        <div className="mt-4">
-          {documentPathForEditing ? (
-            <Button variant="link" asChild>
-              <Link to={documentPathForEditing}>
-                <Trans>Were you trying to edit this document instead?</Trans>
-              </Link>
-            </Button>
-          ) : (
-            <Button variant="link" asChild>
-              <Link to="/documents">Return Home</Link>
-            </Button>
-          )}
+          <div className="mt-4">
+            {documentPathForEditing ? (
+              <Button variant="link" asChild>
+                <Link to={documentPathForEditing}>
+                  <Trans>Were you trying to edit this document instead?</Trans>
+                </Link>
+              </Button>
+            ) : (
+              <Button variant="link" asChild>
+                <Link to="/">
+                  <Trans>Return Home</Trans>
+                </Link>
+              </Button>
+            )}
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }

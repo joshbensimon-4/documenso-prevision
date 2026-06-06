@@ -1,18 +1,4 @@
 import { extendZodWithOpenApi } from '@anatine/zod-openapi';
-import {
-  DocumentDataType,
-  DocumentDistributionMethod,
-  DocumentSigningOrder,
-  FieldType,
-  ReadStatus,
-  RecipientRole,
-  SendStatus,
-  SigningStatus,
-  TeamMemberRole,
-  TemplateType,
-} from '@prisma/client';
-import { z } from 'zod';
-
 import { DATE_FORMATS, DEFAULT_DOCUMENT_DATE_FORMAT } from '@documenso/lib/constants/date-formats';
 import { SUPPORTED_LANGUAGE_CODES } from '@documenso/lib/constants/i18n';
 import { DEFAULT_DOCUMENT_TIME_ZONE, TIME_ZONES } from '@documenso/lib/constants/time-zones';
@@ -23,7 +9,21 @@ import {
   ZRecipientActionAuthTypesSchema,
 } from '@documenso/lib/types/document-auth';
 import { ZDocumentEmailSettingsSchema } from '@documenso/lib/types/document-email';
+import { ZEnvelopeAttachmentTypeSchema } from '@documenso/lib/types/envelope-attachment';
 import { ZFieldMetaPrefillFieldsSchema, ZFieldMetaSchema } from '@documenso/lib/types/field-meta';
+import { zEmail } from '@documenso/lib/utils/zod';
+import {
+  DocumentDataType,
+  DocumentDistributionMethod,
+  DocumentSigningOrder,
+  FieldType,
+  ReadStatus,
+  RecipientRole,
+  SendStatus,
+  SigningStatus,
+  TemplateType,
+} from '@prisma/client';
+import { z } from 'zod';
 
 extendZodWithOpenApi(z);
 
@@ -34,7 +34,8 @@ export const ZNoBodyMutationSchema = null;
  */
 export const ZGetDocumentsQuerySchema = z.object({
   page: z.coerce.number().min(1).optional().default(1),
-  perPage: z.coerce.number().min(1).optional().default(1),
+  perPage: z.coerce.number().min(1).optional().default(10),
+  folderId: z.string().describe('Filter documents by folder ID. When omitted, returns root documents.').optional(),
 });
 
 export type TGetDocumentsQuerySchema = z.infer<typeof ZGetDocumentsQuerySchema>;
@@ -48,9 +49,9 @@ export const ZSuccessfulDocumentResponseSchema = z.object({
   externalId: z.string().nullish(),
   userId: z.number(),
   teamId: z.number().nullish(),
+  folderId: z.string().nullish(),
   title: z.string(),
   status: z.string(),
-  documentDataId: z.string(),
   createdAt: z.date(),
   updatedAt: z.date(),
   completedAt: z.date().nullable(),
@@ -79,9 +80,7 @@ export const ZSuccessfulGetDocumentResponseSchema = ZSuccessfulDocumentResponseS
   ),
 });
 
-export type TSuccessfulGetDocumentResponseSchema = z.infer<
-  typeof ZSuccessfulGetDocumentResponseSchema
->;
+export type TSuccessfulGetDocumentResponseSchema = z.infer<typeof ZSuccessfulGetDocumentResponseSchema>;
 
 export type TSuccessfulDocumentResponseSchema = z.infer<typeof ZSuccessfulDocumentResponseSchema>;
 
@@ -104,9 +103,7 @@ export const ZResendDocumentForSigningMutationSchema = z.object({
   recipients: z.array(z.number()),
 });
 
-export type TResendDocumentForSigningMutationSchema = z.infer<
-  typeof ZResendDocumentForSigningMutationSchema
->;
+export type TResendDocumentForSigningMutationSchema = z.infer<typeof ZResendDocumentForSigningMutationSchema>;
 
 export const ZSuccessfulResendDocumentResponseSchema = z.object({
   message: z.string(),
@@ -119,6 +116,15 @@ export const ZUploadDocumentSuccessfulSchema = z.object({
   key: z.string(),
 });
 
+export const ZDownloadDocumentQuerySchema = z.object({
+  downloadOriginalDocument: z
+    .preprocess((val) => String(val) === 'true' || String(val) === '1', z.boolean())
+    .optional()
+    .default(false),
+});
+
+export type TDownloadDocumentQuerySchema = z.infer<typeof ZDownloadDocumentQuerySchema>;
+
 export const ZDownloadDocumentSuccessfulSchema = z.object({
   downloadUrl: z.string(),
 });
@@ -128,10 +134,16 @@ export type TUploadDocumentSuccessfulSchema = z.infer<typeof ZUploadDocumentSucc
 export const ZCreateDocumentMutationSchema = z.object({
   title: z.string().min(1),
   externalId: z.string().nullish(),
+  folderId: z
+    .string()
+    .describe(
+      'The ID of the folder to create the document in. If not provided, the document will be created in the root folder.',
+    )
+    .optional(),
   recipients: z.array(
     z.object({
       name: z.string().min(1),
-      email: z.string().email().min(1),
+      email: zEmail().min(1),
       role: z.nativeEnum(RecipientRole).optional().default(RecipientRole.SIGNER),
       signingOrder: z.number().nullish(),
     }),
@@ -141,16 +153,14 @@ export const ZCreateDocumentMutationSchema = z.object({
       subject: z.string(),
       message: z.string(),
       timezone: z.string().default(DEFAULT_DOCUMENT_TIME_ZONE).openapi({
-        description:
-          'The timezone of the date. Must be one of the options listed in the list below.',
+        description: 'The timezone of the date. Must be one of the options listed in the list below.',
         enum: TIME_ZONES,
       }),
       dateFormat: z
         .string()
         .default(DEFAULT_DOCUMENT_DATE_FORMAT)
         .openapi({
-          description:
-            'The format of the date. Must be one of the options listed in the list below.',
+          description: 'The format of the date. Must be one of the options listed in the list below.',
           enum: DATE_FORMATS.map((format) => format.value),
         }),
       redirectUrl: z.string(),
@@ -168,14 +178,31 @@ export const ZCreateDocumentMutationSchema = z.object({
     .default({}),
   authOptions: z
     .object({
-      globalAccessAuth: ZDocumentAccessAuthTypesSchema.optional(),
-      globalActionAuth: ZDocumentActionAuthTypesSchema.optional(),
+      globalAccessAuth: z
+        .union([ZDocumentAccessAuthTypesSchema, z.array(ZDocumentAccessAuthTypesSchema)])
+        .transform((val) => (Array.isArray(val) ? val : [val]))
+        .optional()
+        .default([]),
+      globalActionAuth: z
+        .union([ZDocumentActionAuthTypesSchema, z.array(ZDocumentActionAuthTypesSchema)])
+        .transform((val) => (Array.isArray(val) ? val : [val]))
+        .optional()
+        .default([]),
     })
     .optional()
     .openapi({
       description: 'The globalActionAuth property is only available for Enterprise accounts.',
     }),
   formValues: z.record(z.string(), z.union([z.string(), z.boolean(), z.number()])).optional(),
+  attachments: z
+    .array(
+      z.object({
+        label: z.string().min(1, 'Label is required'),
+        data: z.string().url('Must be a valid URL'),
+        type: ZEnvelopeAttachmentTypeSchema.optional().default('link'),
+      }),
+    )
+    .optional(),
 });
 
 export type TCreateDocumentMutationSchema = z.infer<typeof ZCreateDocumentMutationSchema>;
@@ -188,7 +215,7 @@ export const ZCreateDocumentMutationResponseSchema = z.object({
     z.object({
       recipientId: z.number(),
       name: z.string(),
-      email: z.string().email().min(1),
+      email: zEmail().min(1),
       token: z.string(),
       role: z.nativeEnum(RecipientRole),
       signingOrder: z.number().nullish(),
@@ -198,9 +225,7 @@ export const ZCreateDocumentMutationResponseSchema = z.object({
   ),
 });
 
-export type TCreateDocumentMutationResponseSchema = z.infer<
-  typeof ZCreateDocumentMutationResponseSchema
->;
+export type TCreateDocumentMutationResponseSchema = z.infer<typeof ZCreateDocumentMutationResponseSchema>;
 
 export const ZCreateDocumentFromTemplateMutationSchema = z.object({
   title: z.string().min(1),
@@ -208,7 +233,7 @@ export const ZCreateDocumentFromTemplateMutationSchema = z.object({
   recipients: z.array(
     z.object({
       name: z.string().min(1),
-      email: z.string().email().min(1),
+      email: zEmail().min(1),
       role: z.nativeEnum(RecipientRole).optional().default(RecipientRole.SIGNER),
       signingOrder: z.number().nullish(),
     }),
@@ -228,16 +253,31 @@ export const ZCreateDocumentFromTemplateMutationSchema = z.object({
     .optional(),
   authOptions: z
     .object({
-      globalAccessAuth: ZDocumentAccessAuthTypesSchema.optional(),
-      globalActionAuth: ZDocumentActionAuthTypesSchema.optional(),
+      globalAccessAuth: z
+        .union([ZDocumentAccessAuthTypesSchema, z.array(ZDocumentAccessAuthTypesSchema)])
+        .transform((val) => (Array.isArray(val) ? val : [val]))
+        .optional()
+        .default([]),
+      globalActionAuth: z
+        .union([ZDocumentActionAuthTypesSchema, z.array(ZDocumentActionAuthTypesSchema)])
+        .transform((val) => (Array.isArray(val) ? val : [val]))
+        .optional()
+        .default([]),
     })
     .optional(),
   formValues: z.record(z.string(), z.union([z.string(), z.boolean(), z.number()])).optional(),
+  attachments: z
+    .array(
+      z.object({
+        label: z.string().min(1, 'Label is required'),
+        data: z.string().url('Must be a valid URL'),
+        type: ZEnvelopeAttachmentTypeSchema.optional().default('link'),
+      }),
+    )
+    .optional(),
 });
 
-export type TCreateDocumentFromTemplateMutationSchema = z.infer<
-  typeof ZCreateDocumentFromTemplateMutationSchema
->;
+export type TCreateDocumentFromTemplateMutationSchema = z.infer<typeof ZCreateDocumentFromTemplateMutationSchema>;
 
 export const ZCreateDocumentFromTemplateMutationResponseSchema = z.object({
   documentId: z.number(),
@@ -246,7 +286,7 @@ export const ZCreateDocumentFromTemplateMutationResponseSchema = z.object({
     z.object({
       recipientId: z.number(),
       name: z.string(),
-      email: z.string().email().min(1),
+      email: zEmail().min(1),
       token: z.string(),
       role: z.nativeEnum(RecipientRole).optional().default(RecipientRole.SIGNER),
       signingOrder: z.number().nullish(),
@@ -263,23 +303,28 @@ export type TCreateDocumentFromTemplateMutationResponseSchema = z.infer<
 export const ZGenerateDocumentFromTemplateMutationSchema = z.object({
   title: z.string().optional(),
   externalId: z.string().optional(),
+  folderId: z
+    .string()
+    .describe(
+      'The ID of the folder to create the document in. If not provided, the document will be created in the root folder.',
+    )
+    .optional(),
   recipients: z
     .array(
       z.object({
         id: z.number(),
-        email: z.string().email(),
+        email: zEmail(),
         name: z.string().optional(),
         signingOrder: z.number().optional(),
       }),
     )
     .refine(
       (schema) => {
-        const emails = schema.map((signer) => signer.email.toLowerCase());
         const ids = schema.map((signer) => signer.id);
 
-        return new Set(emails).size === emails.length && new Set(ids).size === ids.length;
+        return new Set(ids).size === ids.length;
       },
-      { message: 'Recipient IDs and emails must be unique' },
+      { message: 'Recipient IDs must be unique' },
     ),
   meta: z
     .object({
@@ -301,17 +346,23 @@ export const ZGenerateDocumentFromTemplateMutationSchema = z.object({
     .optional(),
   authOptions: z
     .object({
-      globalAccessAuth: ZDocumentAccessAuthTypesSchema.optional(),
-      globalActionAuth: ZDocumentActionAuthTypesSchema.optional(),
+      globalAccessAuth: z
+        .union([ZDocumentAccessAuthTypesSchema, z.array(ZDocumentAccessAuthTypesSchema)])
+        .transform((val) => (Array.isArray(val) ? val : [val]))
+        .optional()
+        .default([]),
+      globalActionAuth: z
+        .union([ZDocumentActionAuthTypesSchema, z.array(ZDocumentActionAuthTypesSchema)])
+        .transform((val) => (Array.isArray(val) ? val : [val]))
+        .optional()
+        .default([]),
     })
     .optional(),
   formValues: z.record(z.string(), z.union([z.string(), z.boolean(), z.number()])).optional(),
   prefillFields: z.array(ZFieldMetaPrefillFieldsSchema).optional(),
 });
 
-export type TGenerateDocumentFromTemplateMutationSchema = z.infer<
-  typeof ZGenerateDocumentFromTemplateMutationSchema
->;
+export type TGenerateDocumentFromTemplateMutationSchema = z.infer<typeof ZGenerateDocumentFromTemplateMutationSchema>;
 
 export const ZGenerateDocumentFromTemplateMutationResponseSchema = z.object({
   documentId: z.number(),
@@ -320,7 +371,7 @@ export const ZGenerateDocumentFromTemplateMutationResponseSchema = z.object({
     z.object({
       recipientId: z.number(),
       name: z.string(),
-      email: z.string().email().min(1),
+      email: zEmail().min(1),
       token: z.string(),
       role: z.nativeEnum(RecipientRole),
       signingOrder: z.number().nullish(),
@@ -336,12 +387,16 @@ export type TGenerateDocumentFromTemplateMutationResponseSchema = z.infer<
 
 export const ZCreateRecipientMutationSchema = z.object({
   name: z.string().min(1),
-  email: z.string().email().min(1),
+  email: zEmail().min(1),
   role: z.nativeEnum(RecipientRole).optional().default(RecipientRole.SIGNER),
   signingOrder: z.number().nullish(),
   authOptions: z
     .object({
-      actionAuth: ZRecipientActionAuthTypesSchema.optional(),
+      actionAuth: z
+        .union([ZRecipientActionAuthTypesSchema, z.array(ZRecipientActionAuthTypesSchema)])
+        .transform((val) => (Array.isArray(val) ? val : [val]))
+        .optional()
+        .default([]),
     })
     .optional()
     .openapi({
@@ -367,13 +422,13 @@ export const ZSuccessfulRecipientResponseSchema = z.object({
   // !: This handles the fact that we have null documentId's for templates
   // !: while we won't need the default we must add it to satisfy typescript
   documentId: z.number().nullish().default(-1),
-  email: z.string().email().min(1),
+  email: zEmail().min(1),
   name: z.string(),
   role: z.nativeEnum(RecipientRole),
   signingOrder: z.number().nullish(),
   token: z.string(),
-  // !: Not used for now
-  // expired: z.string(),
+  expiresAt: z.date().nullish(),
+  expirationNotifiedAt: z.date().nullish(),
   signedAt: z.date().nullable(),
   readStatus: z.nativeEnum(ReadStatus),
   signingStatus: z.nativeEnum(SigningStatus),
@@ -398,10 +453,7 @@ const ZCreateFieldSchema = z.object({
   fieldMeta: ZFieldMetaSchema.openapi({}),
 });
 
-export const ZCreateFieldMutationSchema = z.union([
-  ZCreateFieldSchema,
-  z.array(ZCreateFieldSchema).min(1),
-]);
+export const ZCreateFieldMutationSchema = z.union([ZCreateFieldSchema, z.array(ZCreateFieldSchema).min(1)]);
 
 export type TCreateFieldMutationSchema = z.infer<typeof ZCreateFieldMutationSchema>;
 
@@ -498,7 +550,6 @@ export const ZTemplateSchema = z.object({
   title: z.string(),
   userId: z.number(),
   teamId: z.number().nullish(),
-  templateDocumentDataId: z.string(),
   createdAt: z.date(),
   updatedAt: z.date(),
 });
@@ -507,12 +558,13 @@ export const ZRecipientSchema = z.object({
   id: z.number(),
   documentId: z.number().nullish(),
   templateId: z.number().nullish(),
-  email: z.string().email().min(1),
+  email: zEmail().min(1),
   name: z.string(),
   token: z.string(),
   signingOrder: z.number().nullish(),
   documentDeletedAt: z.date().nullish(),
-  expired: z.date().nullish(),
+  expiresAt: z.date().nullish(),
+  expirationNotifiedAt: z.date().nullish(),
   signedAt: z.date().nullish(),
   authOptions: z.unknown(),
   role: z.nativeEnum(RecipientRole),
@@ -589,43 +641,5 @@ export const ZSuccessfulGetTemplatesResponseSchema = z.object({
 
 export const ZGetTemplatesQuerySchema = z.object({
   page: z.coerce.number().min(1).optional().default(1),
-  perPage: z.coerce.number().min(1).optional().default(1),
-});
-
-export const ZFindTeamMembersResponseSchema = z.object({
-  members: z.array(
-    z.object({
-      id: z.number(),
-      email: z.string().email(),
-      role: z.nativeEnum(TeamMemberRole),
-    }),
-  ),
-});
-
-export const ZInviteTeamMemberMutationSchema = z.object({
-  email: z
-    .string()
-    .email()
-    .transform((email) => email.toLowerCase()),
-  role: z.nativeEnum(TeamMemberRole).optional().default(TeamMemberRole.MEMBER),
-});
-
-export const ZSuccessfulInviteTeamMemberResponseSchema = z.object({
-  message: z.string(),
-});
-
-export const ZUpdateTeamMemberMutationSchema = z.object({
-  role: z.nativeEnum(TeamMemberRole),
-});
-
-export const ZSuccessfulUpdateTeamMemberResponseSchema = z.object({
-  id: z.number(),
-  email: z.string().email(),
-  role: z.nativeEnum(TeamMemberRole),
-});
-
-export const ZSuccessfulRemoveTeamMemberResponseSchema = z.object({
-  id: z.number(),
-  email: z.string().email(),
-  role: z.nativeEnum(TeamMemberRole),
+  perPage: z.coerce.number().min(1).optional().default(10),
 });

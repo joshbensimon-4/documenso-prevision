@@ -1,38 +1,29 @@
-import type { z } from 'zod';
-
 import { prisma } from '@documenso/prisma';
-import { TeamMemberSchema } from '@documenso/prisma/generated/zod/modelSchema/TeamMemberSchema';
-import { UserSchema } from '@documenso/prisma/generated/zod/modelSchema/UserSchema';
+import type { TGetTeamMembersResponse } from '@documenso/trpc/server/team-router/get-team-members.types';
+
+import { AppError, AppErrorCode } from '../../errors/app-error';
+import { getHighestOrganisationRoleInGroup } from '../../utils/organisations';
+import { getHighestTeamRoleInGroup } from '../../utils/teams';
 
 export type GetTeamMembersOptions = {
   userId: number;
   teamId: number;
 };
 
-export const ZGetTeamMembersResponseSchema = TeamMemberSchema.extend({
-  user: UserSchema.pick({
-    id: true,
-    name: true,
-    email: true,
-  }),
-}).array();
-
-export type TGetTeamMembersResponseSchema = z.infer<typeof ZGetTeamMembersResponseSchema>;
-
 /**
  * Get all team members for a given team.
  */
-export const getTeamMembers = async ({
-  userId,
-  teamId,
-}: GetTeamMembersOptions): Promise<TGetTeamMembersResponseSchema> => {
-  return await prisma.teamMember.findMany({
+export const getTeamMembers = async ({ userId, teamId }: GetTeamMembersOptions): Promise<TGetTeamMembersResponse> => {
+  const teamMembers = await prisma.organisationMember.findMany({
     where: {
-      team: {
-        id: teamId,
-        members: {
-          some: {
-            userId: userId,
+      organisationGroupMembers: {
+        some: {
+          group: {
+            teamGroups: {
+              some: {
+                teamId,
+              },
+            },
           },
         },
       },
@@ -43,8 +34,43 @@ export const getTeamMembers = async ({
           id: true,
           email: true,
           name: true,
+          avatarImageId: true,
+        },
+      },
+      organisationGroupMembers: {
+        include: {
+          group: {
+            include: {
+              teamGroups: true,
+            },
+          },
         },
       },
     },
+  });
+
+  const isAuthorized = teamMembers.some((member) => member.userId === userId);
+
+  // Checks that the user is part of the organisation/team.
+  if (!isAuthorized) {
+    throw new AppError(AppErrorCode.UNAUTHORIZED);
+  }
+
+  return teamMembers.map((member) => {
+    const memberGroups = member.organisationGroupMembers.map((group) => group.group);
+
+    return {
+      id: member.id,
+      userId: member.userId,
+      createdAt: member.createdAt,
+      email: member.user.email,
+      name: member.user.name,
+      avatarImageId: member.user.avatarImageId,
+      // Filter teamGroups to only include the current team
+      teamRole: getHighestTeamRoleInGroup(
+        memberGroups.flatMap((group) => group.teamGroups.filter((tg) => tg.teamId === teamId)),
+      ),
+      organisationRole: getHighestOrganisationRoleInGroup(memberGroups),
+    };
   });
 };

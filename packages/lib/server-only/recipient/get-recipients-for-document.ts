@@ -1,34 +1,28 @@
 import { prisma } from '@documenso/prisma';
+import { EnvelopeType } from '@prisma/client';
+
+import { getEnvelopeWhereInput } from '../envelope/get-envelope-by-id';
 
 export interface GetRecipientsForDocumentOptions {
   documentId: number;
   userId: number;
-  teamId?: number;
+  teamId: number;
 }
 
-export const getRecipientsForDocument = async ({
-  documentId,
-  userId,
-  teamId,
-}: GetRecipientsForDocumentOptions) => {
+export const getRecipientsForDocument = async ({ documentId, userId, teamId }: GetRecipientsForDocumentOptions) => {
+  const { envelopeWhereInput } = await getEnvelopeWhereInput({
+    id: {
+      type: 'documentId',
+      id: documentId,
+    },
+    type: EnvelopeType.DOCUMENT,
+    userId,
+    teamId,
+  });
+
   const recipients = await prisma.recipient.findMany({
     where: {
-      documentId,
-      document: teamId
-        ? {
-            team: {
-              id: teamId,
-              members: {
-                some: {
-                  userId,
-                },
-              },
-            },
-          }
-        : {
-            userId,
-            teamId: null,
-          },
+      envelope: envelopeWhereInput,
     },
     orderBy: {
       id: 'asc',

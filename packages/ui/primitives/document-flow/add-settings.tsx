@@ -1,19 +1,11 @@
-import { useEffect } from 'react';
-
-import { zodResolver } from '@hookform/resolvers/zod';
-import { Trans } from '@lingui/react/macro';
-import { useLingui } from '@lingui/react/macro';
-import { DocumentVisibility, TeamMemberRole } from '@prisma/client';
-import { DocumentStatus, type Field, type Recipient, SendStatus } from '@prisma/client';
-import { InfoIcon } from 'lucide-react';
-import { useForm } from 'react-hook-form';
-import { match } from 'ts-pattern';
-
+import { useAutoSave } from '@documenso/lib/client-only/hooks/use-autosave';
+import { useCurrentOrganisation } from '@documenso/lib/client-only/providers/organisation';
 import { DATE_FORMATS, DEFAULT_DOCUMENT_DATE_FORMAT } from '@documenso/lib/constants/date-formats';
 import { DOCUMENT_SIGNATURE_TYPES } from '@documenso/lib/constants/document';
 import { SUPPORTED_LANGUAGES } from '@documenso/lib/constants/i18n';
 import { DEFAULT_DOCUMENT_TIME_ZONE, TIME_ZONES } from '@documenso/lib/constants/time-zones';
 import type { TDocument } from '@documenso/lib/types/document';
+import type { TRecipientLite } from '@documenso/lib/types/recipient';
 import { extractDocumentAuthMethods } from '@documenso/lib/utils/document-auth';
 import { extractTeamSignatureSettings } from '@documenso/lib/utils/teams';
 import {
@@ -32,21 +24,16 @@ import {
   DocumentVisibilitySelect,
   DocumentVisibilityTooltip,
 } from '@documenso/ui/components/document/document-visibility-select';
-import {
-  Accordion,
-  AccordionContent,
-  AccordionItem,
-  AccordionTrigger,
-} from '@documenso/ui/primitives/accordion';
-import {
-  Form,
-  FormControl,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from '@documenso/ui/primitives/form/form';
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@documenso/ui/primitives/accordion';
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@documenso/ui/primitives/form/form';
 import { MultiSelectCombobox } from '@documenso/ui/primitives/multi-select-combobox';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { Trans, useLingui } from '@lingui/react/macro';
+import { DocumentStatus, DocumentVisibility, type Field, SendStatus, TeamMemberRole } from '@prisma/client';
+import { InfoIcon } from 'lucide-react';
+import { useEffect } from 'react';
+import { useForm } from 'react-hook-form';
+import { match } from 'ts-pattern';
 
 import { DocumentSignatureSettingsTooltip } from '../../components/document/document-signature-settings-tooltip';
 import { Combobox } from '../combobox';
@@ -67,26 +54,28 @@ import type { DocumentFlowStep } from './types';
 
 export type AddSettingsFormProps = {
   documentFlow: DocumentFlowStep;
-  recipients: Recipient[];
+  recipients: TRecipientLite[];
   fields: Field[];
-  isDocumentEnterprise: boolean;
   isDocumentPdfLoaded: boolean;
   document: TDocument;
   currentTeamMemberRole?: TeamMemberRole;
   onSubmit: (_data: TAddSettingsFormSchema) => void;
+  onAutoSave: (_data: TAddSettingsFormSchema) => Promise<void>;
 };
 
 export const AddSettingsFormPartial = ({
   documentFlow,
   recipients,
   fields,
-  isDocumentEnterprise,
   isDocumentPdfLoaded,
   document,
   currentTeamMemberRole,
   onSubmit,
+  onAutoSave,
 }: AddSettingsFormProps) => {
   const { t } = useLingui();
+
+  const organisation = useCurrentOrganisation();
 
   const { documentAuthOption } = extractDocumentAuthMethods({
     documentAuth: document.authOptions,
@@ -98,16 +87,15 @@ export const AddSettingsFormPartial = ({
       title: document.title,
       externalId: document.externalId || '',
       visibility: document.visibility || '',
-      globalAccessAuth: documentAuthOption?.globalAccessAuth || undefined,
-      globalActionAuth: documentAuthOption?.globalActionAuth || undefined,
+      globalAccessAuth: documentAuthOption?.globalAccessAuth || [],
+      globalActionAuth: documentAuthOption?.globalActionAuth || [],
 
       meta: {
         timezone:
-          TIME_ZONES.find((timezone) => timezone === document.documentMeta?.timezone) ??
-          DEFAULT_DOCUMENT_TIME_ZONE,
+          TIME_ZONES.find((timezone) => timezone === document.documentMeta?.timezone) ?? DEFAULT_DOCUMENT_TIME_ZONE,
         dateFormat:
-          DATE_FORMATS.find((format) => format.value === document.documentMeta?.dateFormat)
-            ?.value ?? DEFAULT_DOCUMENT_DATE_FORMAT,
+          DATE_FORMATS.find((format) => format.value === document.documentMeta?.dateFormat)?.value ??
+          DEFAULT_DOCUMENT_DATE_FORMAT,
         redirectUrl: document.documentMeta?.redirectUrl ?? '',
         language: document.documentMeta?.language ?? 'en',
         signatureTypes: extractTeamSignatureSettings(document.documentMeta),
@@ -117,9 +105,7 @@ export const AddSettingsFormPartial = ({
 
   const { stepIndex, currentStep, totalSteps, previousStep } = useStep();
 
-  const documentHasBeenSent = recipients.some(
-    (recipient) => recipient.sendStatus === SendStatus.SENT,
-  );
+  const documentHasBeenSent = recipients.some((recipient) => recipient.sendStatus === SendStatus.SENT);
 
   const canUpdateVisibility = match(currentTeamMemberRole)
     .with(TeamMemberRole.ADMIN, () => true)
@@ -131,14 +117,16 @@ export const AddSettingsFormPartial = ({
     )
     .otherwise(() => false);
 
+  const onFormSubmit = form.handleSubmit(onSubmit);
+
+  const onGoNextClick = () => {
+    void onFormSubmit().catch(console.error);
+  };
+
   // We almost always want to set the timezone to the user's local timezone to avoid confusion
   // when the document is signed.
   useEffect(() => {
-    if (
-      !form.formState.touchedFields.meta?.timezone &&
-      !documentHasBeenSent &&
-      !document.documentMeta?.timezone
-    ) {
+    if (!form.formState.touchedFields.meta?.timezone && !documentHasBeenSent && !document.documentMeta?.timezone) {
       form.setValue('meta.timezone', Intl.DateTimeFormat().resolvedOptions().timeZone);
     }
   }, [
@@ -149,12 +137,31 @@ export const AddSettingsFormPartial = ({
     document.documentMeta?.timezone,
   ]);
 
+  const { scheduleSave } = useAutoSave(onAutoSave);
+
+  const handleAutoSave = async () => {
+    const isFormValid = await form.trigger();
+
+    if (!isFormValid) {
+      return;
+    }
+
+    const formData = form.getValues();
+
+    /*
+     * Parse the form data through the Zod schema to handle transformations
+     * (like -1 -> undefined for the Document Global Auth Access)
+     */
+    const parseResult = ZAddSettingsFormSchema.safeParse(formData);
+
+    if (parseResult.success) {
+      scheduleSave(parseResult.data);
+    }
+  };
+
   return (
     <>
-      <DocumentFlowFormContainerHeader
-        title={documentFlow.title}
-        description={documentFlow.description}
-      />
+      <DocumentFlowFormContainerHeader title={documentFlow.title} description={documentFlow.description} />
 
       <DocumentFlowFormContainerContent>
         {isDocumentPdfLoaded && (
@@ -166,10 +173,7 @@ export const AddSettingsFormPartial = ({
         )}
 
         <Form {...form}>
-          <fieldset
-            className="flex h-full flex-col space-y-6"
-            disabled={form.formState.isSubmitting}
-          >
+          <fieldset className="flex h-full flex-col space-y-6" disabled={form.formState.isSubmitting}>
             <FormField
               control={form.control}
               name="title"
@@ -184,6 +188,8 @@ export const AddSettingsFormPartial = ({
                       className="bg-background"
                       {...field}
                       disabled={document.status !== DocumentStatus.DRAFT || field.disabled}
+                      maxLength={255}
+                      onBlur={handleAutoSave}
                     />
                   </FormControl>
                   <FormMessage />
@@ -203,18 +209,25 @@ export const AddSettingsFormPartial = ({
                         <InfoIcon className="mx-2 h-4 w-4" />
                       </TooltipTrigger>
 
-                      <TooltipContent className="text-foreground max-w-md space-y-2 p-4">
+                      <TooltipContent className="max-w-md space-y-2 p-4 text-foreground">
                         <Trans>
-                          Controls the language for the document, including the language to be used
-                          for email notifications, and the final certificate that is generated and
-                          attached to the document.
+                          Controls the language for the document, including the language to be used for email
+                          notifications, and the final certificate that is generated and attached to the document.
                         </Trans>
                       </TooltipContent>
                     </Tooltip>
                   </FormLabel>
 
                   <FormControl>
-                    <Select {...field} onValueChange={field.onChange}>
+                    <Select
+                      {...field}
+                      onValueChange={(value) => {
+                        field.onChange(value);
+                        void handleAutoSave();
+                      }}
+                      value={field.value}
+                      disabled={field.disabled}
+                    >
                       <SelectTrigger className="bg-background">
                         <SelectValue />
                       </SelectTrigger>
@@ -222,7 +235,7 @@ export const AddSettingsFormPartial = ({
                       <SelectContent>
                         {Object.entries(SUPPORTED_LANGUAGES).map(([code, language]) => (
                           <SelectItem key={code} value={code}>
-                            {language.full}
+                            {t(language.full)}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -244,7 +257,15 @@ export const AddSettingsFormPartial = ({
                   </FormLabel>
 
                   <FormControl>
-                    <DocumentGlobalAuthAccessSelect {...field} onValueChange={field.onChange} />
+                    <DocumentGlobalAuthAccessSelect
+                      {...field}
+                      onValueChange={(value) => {
+                        field.onChange(value);
+                        void handleAutoSave();
+                      }}
+                      value={field.value}
+                      disabled={field.disabled}
+                    />
                   </FormControl>
                 </FormItem>
               )}
@@ -257,7 +278,7 @@ export const AddSettingsFormPartial = ({
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel className="flex flex-row items-center">
-                      Document visibility
+                      <Trans>Document visibility</Trans>
                       <DocumentVisibilityTooltip />
                     </FormLabel>
 
@@ -266,7 +287,10 @@ export const AddSettingsFormPartial = ({
                         canUpdateVisibility={canUpdateVisibility}
                         currentTeamMemberRole={currentTeamMemberRole}
                         {...field}
-                        onValueChange={field.onChange}
+                        onValueChange={(value) => {
+                          field.onChange(value);
+                          void handleAutoSave();
+                        }}
                       />
                     </FormControl>
                   </FormItem>
@@ -274,7 +298,7 @@ export const AddSettingsFormPartial = ({
               />
             )}
 
-            {isDocumentEnterprise && (
+            {organisation.organisationClaim.flags.cfr21 && (
               <FormField
                 control={form.control}
                 name="globalActionAuth"
@@ -286,7 +310,15 @@ export const AddSettingsFormPartial = ({
                     </FormLabel>
 
                     <FormControl>
-                      <DocumentGlobalAuthActionSelect {...field} onValueChange={field.onChange} />
+                      <DocumentGlobalAuthActionSelect
+                        {...field}
+                        onValueChange={(value) => {
+                          field.onChange(value);
+                          void handleAutoSave();
+                        }}
+                        value={field.value}
+                        disabled={field.disabled}
+                      />
                     </FormControl>
                   </FormItem>
                 )}
@@ -295,11 +327,11 @@ export const AddSettingsFormPartial = ({
 
             <Accordion type="multiple" className="mt-6">
               <AccordionItem value="advanced-options" className="border-none">
-                <AccordionTrigger className="text-foreground mb-2 rounded border px-3 py-2 text-left hover:bg-neutral-200/30 hover:no-underline">
+                <AccordionTrigger className="mb-2 rounded border px-3 py-2 text-left text-foreground hover:bg-neutral-200/30 hover:no-underline">
                   <Trans>Advanced Options</Trans>
                 </AccordionTrigger>
 
-                <AccordionContent className="text-muted-foreground -mx-1 px-1 pt-2 text-sm leading-relaxed">
+                <AccordionContent className="-mx-1 px-1 pt-2 text-muted-foreground text-sm leading-relaxed">
                   <div className="flex flex-col space-y-6">
                     <FormField
                       control={form.control}
@@ -313,17 +345,17 @@ export const AddSettingsFormPartial = ({
                                 <InfoIcon className="mx-2 h-4 w-4" />
                               </TooltipTrigger>
 
-                              <TooltipContent className="text-muted-foreground max-w-xs">
+                              <TooltipContent className="max-w-xs text-muted-foreground">
                                 <Trans>
-                                  Add an external ID to the document. This can be used to identify
-                                  the document in external systems.
+                                  Add an external ID to the document. This can be used to identify the document in
+                                  external systems.
                                 </Trans>
                               </TooltipContent>
                             </Tooltip>
                           </FormLabel>
 
                           <FormControl>
-                            <Input className="bg-background" {...field} />
+                            <Input className="bg-background" {...field} onBlur={handleAutoSave} />
                           </FormControl>
 
                           <FormMessage />
@@ -348,9 +380,12 @@ export const AddSettingsFormPartial = ({
                                 value: option.value,
                               }))}
                               selectedValues={field.value}
-                              onChange={field.onChange}
-                              className="bg-background w-full"
-                              emptySelectionPlaceholder="Select signature types"
+                              onChange={(value) => {
+                                field.onChange(value);
+                                void handleAutoSave();
+                              }}
+                              className="w-full bg-background"
+                              emptySelectionPlaceholder={t`Select signature types`}
                             />
                           </FormControl>
 
@@ -371,7 +406,11 @@ export const AddSettingsFormPartial = ({
                           <FormControl>
                             <Select
                               {...field}
-                              onValueChange={field.onChange}
+                              onValueChange={(value) => {
+                                field.onChange(value);
+                                void handleAutoSave();
+                              }}
+                              value={field.value}
                               disabled={documentHasBeenSent}
                             >
                               <SelectTrigger className="bg-background">
@@ -407,7 +446,11 @@ export const AddSettingsFormPartial = ({
                               className="bg-background"
                               options={TIME_ZONES}
                               {...field}
-                              onChange={(value) => value && field.onChange(value)}
+                              onChange={(value) => {
+                                value && field.onChange(value);
+                                void handleAutoSave();
+                              }}
+                              value={field.value}
                               disabled={documentHasBeenSent}
                             />
                           </FormControl>
@@ -429,16 +472,14 @@ export const AddSettingsFormPartial = ({
                                 <InfoIcon className="mx-2 h-4 w-4" />
                               </TooltipTrigger>
 
-                              <TooltipContent className="text-muted-foreground max-w-xs">
-                                <Trans>
-                                  Add a URL to redirect the user to once the document is signed
-                                </Trans>
+                              <TooltipContent className="max-w-xs text-muted-foreground">
+                                <Trans>Add a URL to redirect the user to once the document is signed</Trans>
                               </TooltipContent>
                             </Tooltip>
                           </FormLabel>
 
                           <FormControl>
-                            <Input className="bg-background" {...field} />
+                            <Input className="bg-background" {...field} onBlur={handleAutoSave} />
                           </FormControl>
 
                           <FormMessage />
@@ -461,7 +502,7 @@ export const AddSettingsFormPartial = ({
           disabled={form.formState.isSubmitting}
           canGoBack={stepIndex !== 0}
           onGoBackClick={previousStep}
-          onGoNextClick={form.handleSubmit(onSubmit)}
+          onGoNextClick={onGoNextClick}
         />
       </DocumentFlowFormContainerFooter>
     </>

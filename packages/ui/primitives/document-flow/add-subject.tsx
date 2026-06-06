@@ -1,31 +1,34 @@
+import { useAutoSave } from '@documenso/lib/client-only/hooks/use-autosave';
+import { useCurrentOrganisation } from '@documenso/lib/client-only/providers/organisation';
+import { RECIPIENT_ROLES_DESCRIPTION } from '@documenso/lib/constants/recipient-roles';
+import type { TDocument } from '@documenso/lib/types/document';
+import { ZDocumentEmailSettingsSchema } from '@documenso/lib/types/document-email';
+import type { TRecipientLite } from '@documenso/lib/types/recipient';
+import { formatSigningLink } from '@documenso/lib/utils/recipients';
+import { trpc } from '@documenso/trpc/react';
+import { DocumentSendEmailMessageHelper } from '@documenso/ui/components/document/document-send-email-message-helper';
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@documenso/ui/primitives/form/form';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@documenso/ui/primitives/select';
+import { Tabs, TabsList, TabsTrigger } from '@documenso/ui/primitives/tabs';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { msg } from '@lingui/core/macro';
 import { useLingui } from '@lingui/react';
 import { Trans } from '@lingui/react/macro';
-import type { Field, Recipient } from '@prisma/client';
+import type { Field } from '@prisma/client';
 import { DocumentDistributionMethod, DocumentStatus, RecipientRole } from '@prisma/client';
 import { AnimatePresence, motion } from 'framer-motion';
+import { InfoIcon } from 'lucide-react';
+import { useEffect } from 'react';
 import { useForm } from 'react-hook-form';
-
-import { RECIPIENT_ROLES_DESCRIPTION } from '@documenso/lib/constants/recipient-roles';
-import type { TDocument } from '@documenso/lib/types/document';
-import { ZDocumentEmailSettingsSchema } from '@documenso/lib/types/document-email';
-import { formatSigningLink } from '@documenso/lib/utils/recipients';
-import { DocumentSendEmailMessageHelper } from '@documenso/ui/components/document/document-send-email-message-helper';
-import { Tabs, TabsList, TabsTrigger } from '@documenso/ui/primitives/tabs';
 
 import { CopyTextButton } from '../../components/common/copy-text-button';
 import { DocumentEmailCheckboxes } from '../../components/document/document-email-checkboxes';
-import {
-  DocumentReadOnlyFields,
-  mapFieldsWithRecipients,
-} from '../../components/document/document-read-only-fields';
+import { DocumentReadOnlyFields, mapFieldsWithRecipients } from '../../components/document/document-read-only-fields';
 import { AvatarWithText } from '../avatar';
-import { FormErrorMessage } from '../form/form-error-message';
 import { Input } from '../input';
-import { Label } from '../label';
 import { useStep } from '../stepper';
 import { Textarea } from '../textarea';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../tooltip';
 import { toast } from '../use-toast';
 import { type TAddSubjectFormSchema, ZAddSubjectFormSchema } from './add-subject.types';
 import {
@@ -39,41 +42,57 @@ import type { DocumentFlowStep } from './types';
 
 export type AddSubjectFormProps = {
   documentFlow: DocumentFlowStep;
-  recipients: Recipient[];
+  recipients: TRecipientLite[];
   fields: Field[];
   document: TDocument;
   onSubmit: (_data: TAddSubjectFormSchema) => void;
+  onAutoSave: (_data: TAddSubjectFormSchema) => Promise<void>;
   isDocumentPdfLoaded: boolean;
 };
 
 export const AddSubjectFormPartial = ({
   documentFlow,
-  recipients: recipients,
-  fields: fields,
+  recipients,
+  fields,
   document,
   onSubmit,
+  onAutoSave,
   isDocumentPdfLoaded,
 }: AddSubjectFormProps) => {
   const { _ } = useLingui();
 
-  const {
-    register,
-    handleSubmit,
-    setValue,
-    watch,
-    formState: { errors, isSubmitting },
-  } = useForm<TAddSubjectFormSchema>({
+  const organisation = useCurrentOrganisation();
+
+  const form = useForm<TAddSubjectFormSchema>({
     defaultValues: {
       meta: {
+        emailId: document.documentMeta?.emailId ?? null,
+        emailReplyTo: document.documentMeta?.emailReplyTo || undefined,
+        // emailReplyName: document.documentMeta?.emailReplyName || undefined,
         subject: document.documentMeta?.subject ?? '',
         message: document.documentMeta?.message ?? '',
-        distributionMethod:
-          document.documentMeta?.distributionMethod || DocumentDistributionMethod.EMAIL,
+        distributionMethod: document.documentMeta?.distributionMethod || DocumentDistributionMethod.EMAIL,
         emailSettings: ZDocumentEmailSettingsSchema.parse(document?.documentMeta?.emailSettings),
       },
     },
     resolver: zodResolver(ZAddSubjectFormSchema),
   });
+
+  const {
+    handleSubmit,
+    setValue,
+    watch,
+    trigger,
+    getValues,
+    formState: { isSubmitting },
+  } = form;
+
+  const { data: emailData, isLoading: isLoadingEmails } = trpc.enterprise.organisation.email.find.useQuery({
+    organisationId: organisation.id,
+    perPage: 100,
+  });
+
+  const emails = emailData?.data || [];
 
   const GoNextLabel = {
     [DocumentDistributionMethod.EMAIL]: {
@@ -98,12 +117,38 @@ export const AddSubjectFormPartial = ({
   const onFormSubmit = handleSubmit(onSubmit);
   const { currentStep, totalSteps, previousStep } = useStep();
 
+  const { scheduleSave } = useAutoSave(onAutoSave);
+
+  const handleAutoSave = async () => {
+    const isFormValid = await trigger();
+
+    if (!isFormValid) {
+      return;
+    }
+
+    const formData = getValues();
+
+    scheduleSave(formData);
+  };
+
+  useEffect(() => {
+    const container = window.document.getElementById('document-flow-form-container');
+
+    const handleBlur = () => {
+      void handleAutoSave();
+    };
+
+    if (container) {
+      container.addEventListener('blur', handleBlur, true);
+      return () => {
+        container.removeEventListener('blur', handleBlur, true);
+      };
+    }
+  }, []);
+
   return (
     <>
-      <DocumentFlowFormContainerHeader
-        title={documentFlow.title}
-        description={documentFlow.description}
-      />
+      <DocumentFlowFormContainerHeader title={documentFlow.title} description={documentFlow.description} />
       <DocumentFlowFormContainerContent>
         <div className="flex flex-col">
           {isDocumentPdfLoaded && (
@@ -124,10 +169,10 @@ export const AddSubjectFormPartial = ({
           >
             <TabsList className="w-full">
               <TabsTrigger className="w-full" value={DocumentDistributionMethod.EMAIL}>
-                Email
+                <Trans>Email</Trans>
               </TabsTrigger>
               <TabsTrigger className="w-full" value={DocumentDistributionMethod.NONE}>
-                None
+                <Trans>None</Trans>
               </TabsTrigger>
             </TabsList>
           </Tabs>
@@ -139,54 +184,141 @@ export const AddSubjectFormPartial = ({
                 initial={{ opacity: 0, y: 15 }}
                 animate={{ opacity: 1, y: 0, transition: { duration: 0.3 } }}
                 exit={{ opacity: 0, transition: { duration: 0.15 } }}
-                className="flex flex-col gap-y-4 rounded-lg border p-4"
               >
-                <div>
-                  <Label htmlFor="subject">
-                    <Trans>
-                      Subject <span className="text-muted-foreground">(Optional)</span>
-                    </Trans>
-                  </Label>
+                <Form {...form}>
+                  <fieldset
+                    className="flex flex-col gap-y-4 rounded-lg border p-4"
+                    disabled={form.formState.isSubmitting}
+                  >
+                    {organisation.organisationClaim.flags.emailDomains && (
+                      <FormField
+                        control={form.control}
+                        name="meta.emailId"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>
+                              <Trans>Email Sender</Trans>
+                            </FormLabel>
+                            <FormControl>
+                              <Select
+                                {...field}
+                                value={field.value === null ? '-1' : field.value}
+                                onValueChange={(value) => field.onChange(value === '-1' ? null : value)}
+                              >
+                                <SelectTrigger loading={isLoadingEmails} className="bg-background">
+                                  <SelectValue />
+                                </SelectTrigger>
 
-                  <Input
-                    id="subject"
-                    className="bg-background mt-2"
-                    disabled={isSubmitting}
-                    {...register('meta.subject')}
-                  />
+                                <SelectContent>
+                                  {emails.map((email) => (
+                                    <SelectItem key={email.id} value={email.id}>
+                                      {email.email}
+                                    </SelectItem>
+                                  ))}
 
-                  <FormErrorMessage className="mt-2" error={errors.meta?.subject} />
-                </div>
+                                  <SelectItem value={'-1'}>Documenso</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </FormControl>
 
-                <div>
-                  <Label htmlFor="message">
-                    <Trans>
-                      Message <span className="text-muted-foreground">(Optional)</span>
-                    </Trans>
-                  </Label>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    )}
 
-                  <Textarea
-                    id="message"
-                    className="bg-background mt-2 h-32 resize-none"
-                    disabled={isSubmitting}
-                    {...register('meta.message')}
-                  />
+                    <FormField
+                      control={form.control}
+                      name="meta.emailReplyTo"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>
+                            <Trans>
+                              Reply To Email <span className="text-muted-foreground">(Optional)</span>
+                            </Trans>
+                          </FormLabel>
 
-                  <FormErrorMessage
-                    className="mt-2"
-                    error={
-                      typeof errors.meta?.message !== 'string' ? errors.meta?.message : undefined
-                    }
-                  />
-                </div>
+                          <FormControl>
+                            <Input {...field} maxLength={254} />
+                          </FormControl>
 
-                <DocumentSendEmailMessageHelper />
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
 
-                <DocumentEmailCheckboxes
-                  className="mt-2"
-                  value={emailSettings}
-                  onChange={(value) => setValue('meta.emailSettings', value)}
-                />
+                    {/* <FormField
+                      control={form.control}
+                      name="meta.emailReplyName"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>
+                            <Trans>Reply To Name</Trans>{' '}
+                            <span className="text-muted-foreground">(Optional)</span>
+                          </FormLabel>
+
+                          <FormControl>
+                            <Input {...field} />
+                          </FormControl>
+
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    /> */}
+
+                    <FormField
+                      control={form.control}
+                      name="meta.subject"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>
+                            <Trans>
+                              Subject <span className="text-muted-foreground">(Optional)</span>
+                            </Trans>
+                          </FormLabel>
+
+                          <FormControl>
+                            <Input {...field} maxLength={255} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name="meta.message"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel className="flex flex-row items-center">
+                            <Trans>
+                              Message <span className="text-muted-foreground">(Optional)</span>
+                            </Trans>
+                            <Tooltip>
+                              <TooltipTrigger>
+                                <InfoIcon className="mx-2 h-4 w-4" />
+                              </TooltipTrigger>
+                              <TooltipContent className="p-4 text-muted-foreground">
+                                <DocumentSendEmailMessageHelper />
+                              </TooltipContent>
+                            </Tooltip>
+                          </FormLabel>
+
+                          <FormControl>
+                            <Textarea className="mt-2 h-16 resize-none bg-background" {...field} maxLength={5000} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <DocumentEmailCheckboxes
+                      className="mt-2"
+                      value={emailSettings}
+                      onChange={(value) => setValue('meta.emailSettings', value)}
+                    />
+                  </fieldset>
+                </Form>
               </motion.div>
             )}
 
@@ -199,20 +331,20 @@ export const AddSubjectFormPartial = ({
                 className="rounded-lg border"
               >
                 {document.status === DocumentStatus.DRAFT ? (
-                  <div className="text-muted-foreground py-16 text-center text-sm">
+                  <div className="py-16 text-center text-muted-foreground text-sm">
                     <p>
                       <Trans>We won't send anything to notify recipients.</Trans>
                     </p>
 
                     <p className="mt-2">
                       <Trans>
-                        We will generate signing links for with you, which you can send to the
-                        recipients through your method of choice.
+                        We will generate signing links for you, which you can send to the recipients through your method
+                        of choice.
                       </Trans>
                     </p>
                   </div>
                 ) : (
-                  <ul className="text-muted-foreground divide-y">
+                  <ul className="divide-y text-muted-foreground">
                     {recipients.length === 0 && (
                       <li className="flex flex-col items-center justify-center py-6 text-sm">
                         <Trans>No recipients</Trans>
@@ -220,15 +352,10 @@ export const AddSubjectFormPartial = ({
                     )}
 
                     {recipients.map((recipient) => (
-                      <li
-                        key={recipient.id}
-                        className="flex items-center justify-between px-4 py-3 text-sm"
-                      >
+                      <li key={recipient.id} className="flex items-center justify-between px-4 py-3 text-sm">
                         <AvatarWithText
                           avatarFallback={recipient.email.slice(0, 1).toUpperCase()}
-                          primaryText={
-                            <p className="text-muted-foreground text-sm">{recipient.email}</p>
-                          }
+                          primaryText={<p className="text-muted-foreground text-sm">{recipient.email}</p>}
                           secondaryText={
                             <p className="text-muted-foreground/70 text-xs">
                               {_(RECIPIENT_ROLES_DESCRIPTION[recipient.role].roleName)}
@@ -242,9 +369,7 @@ export const AddSubjectFormPartial = ({
                             onCopySuccess={() => {
                               toast({
                                 title: _(msg`Copied to clipboard`),
-                                description: _(
-                                  msg`The signing link has been copied to your clipboard.`,
-                                ),
+                                description: _(msg`The signing link has been copied to your clipboard.`),
                               });
                             }}
                             badgeContentUncopied={

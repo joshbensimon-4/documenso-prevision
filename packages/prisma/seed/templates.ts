@@ -5,28 +5,37 @@ import {
   DIRECT_TEMPLATE_RECIPIENT_EMAIL,
   DIRECT_TEMPLATE_RECIPIENT_NAME,
 } from '@documenso/lib/constants/direct-templates';
+import { incrementTemplateId } from '@documenso/lib/server-only/envelope/increment-id';
+import { prefixedId } from '@documenso/lib/universal/id';
 
 import { prisma } from '..';
 import type { Prisma, User } from '../client';
-import { DocumentDataType, ReadStatus, RecipientRole, SendStatus, SigningStatus } from '../client';
+import {
+  DocumentDataType,
+  DocumentSource,
+  EnvelopeType,
+  ReadStatus,
+  RecipientRole,
+  SendStatus,
+  SigningStatus,
+} from '../client';
 
-const examplePdf = fs
-  .readFileSync(path.join(__dirname, '../../../assets/example.pdf'))
-  .toString('base64');
+const examplePdf = fs.readFileSync(path.join(__dirname, '../../../assets/example.pdf')).toString('base64');
 
 type SeedTemplateOptions = {
   title?: string;
   userId: number;
-  teamId?: number;
-  createTemplateOptions?: Partial<Prisma.TemplateCreateInput>;
+  teamId: number;
+  internalVersion?: 1 | 2;
+  createTemplateOptions?: Partial<Prisma.EnvelopeUncheckedCreateInput>;
 };
 
 type CreateTemplateOptions = {
   key?: string | number;
-  createTemplateOptions?: Partial<Prisma.TemplateUncheckedCreateInput>;
+  createTemplateOptions?: Partial<Prisma.EnvelopeUncheckedCreateInput>;
 };
 
-export const seedBlankTemplate = async (owner: User, options: CreateTemplateOptions = {}) => {
+export const seedBlankTemplate = async (owner: User, teamId: number, options: CreateTemplateOptions = {}) => {
   const { key, createTemplateOptions = {} } = options;
 
   const documentData = await prisma.documentData.create({
@@ -37,12 +46,39 @@ export const seedBlankTemplate = async (owner: User, options: CreateTemplateOpti
     },
   });
 
-  return await prisma.template.create({
+  const templateId = await incrementTemplateId();
+
+  const documentMeta = await prisma.documentMeta.create({
+    data: {},
+  });
+
+  return await prisma.envelope.create({
     data: {
+      id: prefixedId('envelope'),
+      secondaryId: templateId.formattedTemplateId,
+      internalVersion: 1,
+      type: EnvelopeType.TEMPLATE,
       title: `[TEST] Template ${key}`,
-      templateDocumentDataId: documentData.id,
+      teamId,
+      envelopeItems: {
+        create: {
+          id: prefixedId('envelope_item'),
+          title: `[TEST] Template ${key}`,
+          documentDataId: documentData.id,
+          order: 1,
+        },
+      },
       userId: owner.id,
+      source: DocumentSource.TEMPLATE,
+      documentMetaId: documentMeta.id,
       ...createTemplateOptions,
+    },
+    include: {
+      envelopeItems: {
+        include: {
+          documentData: true,
+        },
+      },
     },
   });
 };
@@ -58,19 +94,31 @@ export const seedTemplate = async (options: SeedTemplateOptions) => {
     },
   });
 
-  return await prisma.template.create({
+  const templateId = await incrementTemplateId();
+
+  const documentMeta = await prisma.documentMeta.create({
+    data: {},
+  });
+
+  return await prisma.envelope.create({
     data: {
+      id: prefixedId('envelope'),
+      secondaryId: templateId.formattedTemplateId,
+      internalVersion: options.internalVersion ?? 1,
+      type: EnvelopeType.TEMPLATE,
       title,
-      templateDocumentData: {
-        connect: {
-          id: documentData.id,
+      envelopeItems: {
+        create: {
+          id: prefixedId('envelope_item'),
+          title,
+          documentDataId: documentData.id,
+          order: 1,
         },
       },
-      user: {
-        connect: {
-          id: userId,
-        },
-      },
+      source: DocumentSource.TEMPLATE,
+      documentMetaId: documentMeta.id,
+      userId,
+      teamId,
       recipients: {
         create: {
           email: 'recipient.1@documenso.com',
@@ -82,15 +130,14 @@ export const seedTemplate = async (options: SeedTemplateOptions) => {
           role: RecipientRole.SIGNER,
         },
       },
-      ...(teamId
-        ? {
-            team: {
-              connect: {
-                id: teamId,
-              },
-            },
-          }
-        : {}),
+    },
+    include: {
+      envelopeItems: {
+        include: {
+          documentData: true,
+        },
+      },
+      recipients: true,
     },
   });
 };
@@ -106,35 +153,39 @@ export const seedDirectTemplate = async (options: SeedTemplateOptions) => {
     },
   });
 
-  const template = await prisma.template.create({
+  const templateId = await incrementTemplateId();
+
+  const documentMeta = await prisma.documentMeta.create({
+    data: {},
+  });
+
+  const template = await prisma.envelope.create({
     data: {
+      id: prefixedId('envelope'),
+      secondaryId: templateId.formattedTemplateId,
+      internalVersion: options.internalVersion ?? 1,
+      type: EnvelopeType.TEMPLATE,
       title,
-      templateDocumentData: {
-        connect: {
-          id: documentData.id,
+      envelopeItems: {
+        create: {
+          id: prefixedId('envelope_item'),
+          title,
+          documentDataId: documentData.id,
+          order: 1,
         },
       },
-      user: {
-        connect: {
-          id: userId,
-        },
-      },
+      source: DocumentSource.TEMPLATE,
+      documentMetaId: documentMeta.id,
+      userId,
+      teamId,
       recipients: {
         create: {
+          signingOrder: 1,
           email: DIRECT_TEMPLATE_RECIPIENT_EMAIL,
           name: DIRECT_TEMPLATE_RECIPIENT_NAME,
           token: Math.random().toString().slice(2, 7),
         },
       },
-      ...(teamId
-        ? {
-            team: {
-              connect: {
-                id: teamId,
-              },
-            },
-          }
-        : {}),
       ...options.createTemplateOptions,
     },
     include: {
@@ -153,14 +204,14 @@ export const seedDirectTemplate = async (options: SeedTemplateOptions) => {
 
   await prisma.templateDirectLink.create({
     data: {
-      templateId: template.id,
+      envelopeId: template.id,
       enabled: true,
       token: Math.random().toString(),
       directTemplateRecipientId: directTemplateRecpient.id,
     },
   });
 
-  return await prisma.template.findFirstOrThrow({
+  return await prisma.envelope.findFirstOrThrow({
     where: {
       id: template.id,
     },
@@ -169,6 +220,11 @@ export const seedDirectTemplate = async (options: SeedTemplateOptions) => {
       fields: true,
       recipients: true,
       team: true,
+      envelopeItems: {
+        select: {
+          documentData: true,
+        },
+      },
     },
   });
 };

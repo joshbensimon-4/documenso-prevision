@@ -1,11 +1,3 @@
-import { useLayoutEffect, useMemo, useRef, useState } from 'react';
-
-import { msg } from '@lingui/core/macro';
-import { useLingui } from '@lingui/react';
-import { Trans } from '@lingui/react/macro';
-import { Loader } from 'lucide-react';
-import { useRevalidator } from 'react-router';
-
 import { DO_NOT_INVALIDATE_QUERY_ON_MUTATION } from '@documenso/lib/constants/trpc';
 import { AppError, AppErrorCode } from '@documenso/lib/errors/app-error';
 import type { TRecipientActionAuth } from '@documenso/lib/types/document-auth';
@@ -19,6 +11,12 @@ import { Button } from '@documenso/ui/primitives/button';
 import { Dialog, DialogContent, DialogFooter, DialogTitle } from '@documenso/ui/primitives/dialog';
 import { SignaturePad } from '@documenso/ui/primitives/signature-pad';
 import { useToast } from '@documenso/ui/primitives/use-toast';
+import { msg } from '@lingui/core/macro';
+import { useLingui } from '@lingui/react';
+import { Trans } from '@lingui/react/macro';
+import { Loader } from 'lucide-react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useRevalidator } from 'react-router';
 
 import { DocumentSigningDisclosure } from '~/components/general/document-signing/document-signing-disclosure';
 
@@ -56,18 +54,19 @@ export const DocumentSigningSignatureField = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const [fontSize, setFontSize] = useState(2);
 
-  const { signature: providedSignature, setSignature: setProvidedSignature } =
-    useRequiredDocumentSigningContext();
+  const {
+    fullName,
+    signature: providedSignature,
+    setSignature: setProvidedSignature,
+  } = useRequiredDocumentSigningContext();
 
   const { executeActionAuthProcedure } = useRequiredDocumentSigningAuthContext();
 
   const { mutateAsync: signFieldWithToken, isPending: isSignFieldWithTokenLoading } =
     trpc.field.signFieldWithToken.useMutation(DO_NOT_INVALIDATE_QUERY_ON_MUTATION);
 
-  const {
-    mutateAsync: removeSignedFieldWithToken,
-    isPending: isRemoveSignedFieldWithTokenLoading,
-  } = trpc.field.removeSignedFieldWithToken.useMutation(DO_NOT_INVALIDATE_QUERY_ON_MUTATION);
+  const { mutateAsync: removeSignedFieldWithToken, isPending: isRemoveSignedFieldWithTokenLoading } =
+    trpc.field.removeSignedFieldWithToken.useMutation(DO_NOT_INVALIDATE_QUERY_ON_MUTATION);
 
   const { signature } = field;
 
@@ -208,10 +207,7 @@ export const DocumentSigningSignatureField = ({
       let size = 2;
       text.style.fontSize = `${size}rem`;
 
-      while (
-        (text.scrollWidth > container.clientWidth || text.scrollHeight > container.clientHeight) &&
-        size > 0.8
-      ) {
+      while ((text.scrollWidth > container.clientWidth || text.scrollHeight > container.clientHeight) && size > 0.8) {
         size -= 0.1;
         text.style.fontSize = `${size}rem`;
       }
@@ -236,13 +232,13 @@ export const DocumentSigningSignatureField = ({
       type="Signature"
     >
       {isLoading && (
-        <div className="bg-background absolute inset-0 flex items-center justify-center rounded-md">
-          <Loader className="text-primary h-5 w-5 animate-spin md:h-8 md:w-8" />
+        <div className="absolute inset-0 flex items-center justify-center rounded-md bg-background">
+          <Loader className="h-5 w-5 animate-spin text-primary md:h-8 md:w-8" />
         </div>
       )}
 
       {state === 'empty' && (
-        <p className="group-hover:text-primary font-signature text-muted-foreground group-hover:text-recipient-green text-[clamp(0.575rem,12cqw,1.2rem)] text-xl duration-200">
+        <p className="font-signature text-[clamp(0.575rem,12cqw,1.2rem)] text-muted-foreground text-xl duration-200 group-hover:text-primary group-hover:text-recipient-green">
           <Trans>Signature</Trans>
         </p>
       )}
@@ -259,7 +255,7 @@ export const DocumentSigningSignatureField = ({
         <div ref={containerRef} className="flex h-full w-full items-center justify-center p-2">
           <p
             ref={signatureRef}
-            className="font-signature text-muted-foreground text-wrap-field w-full overflow-hidden break-words text-center leading-tight duration-200"
+            className="w-full overflow-hidden break-all text-center font-signature text-muted-foreground leading-tight duration-200"
             style={{ fontSize: `${fontSize}rem` }}
           >
             {signature?.typedSignature}
@@ -271,13 +267,13 @@ export const DocumentSigningSignatureField = ({
         <DialogContent>
           <DialogTitle>
             <Trans>
-              Sign as {recipient.name}{' '}
-              <div className="text-muted-foreground h-5">({recipient.email})</div>
+              Sign as {recipient.name} <div className="h-5 text-muted-foreground">({recipient.email})</div>
             </Trans>
           </DialogTitle>
 
           <SignaturePad
             className="mt-2"
+            fullName={fullName}
             value={localSignature ?? ''}
             onChange={({ value }) => setLocalSignature(value)}
             typedSignatureEnabled={typedSignatureEnabled}
@@ -300,12 +296,7 @@ export const DocumentSigningSignatureField = ({
               >
                 <Trans>Cancel</Trans>
               </Button>
-              <Button
-                type="button"
-                className="flex-1"
-                disabled={!localSignature}
-                onClick={() => onDialogSignClick()}
-              >
+              <Button type="button" className="flex-1" disabled={!localSignature} onClick={() => onDialogSignClick()}>
                 <Trans>Sign</Trans>
               </Button>
             </div>

@@ -1,22 +1,14 @@
-import { useEffect, useState } from 'react';
-
-import { msg } from '@lingui/core/macro';
-import { useLingui } from '@lingui/react';
-import { useNavigate } from 'react-router';
-
 import { DocumentSignatureType } from '@documenso/lib/constants/document';
 import { isValidLanguageCode } from '@documenso/lib/constants/i18n';
-import {
-  DO_NOT_INVALIDATE_QUERY_ON_MUTATION,
-  SKIP_QUERY_BATCH_META,
-} from '@documenso/lib/constants/trpc';
+import { DO_NOT_INVALIDATE_QUERY_ON_MUTATION, SKIP_QUERY_BATCH_META } from '@documenso/lib/constants/trpc';
+import { ZDocumentAccessAuthTypesSchema } from '@documenso/lib/types/document-auth';
 import type { TTemplate } from '@documenso/lib/types/template';
+import { getDocumentDataUrlForPdfViewer } from '@documenso/lib/utils/envelope-download';
 import { trpc } from '@documenso/trpc/react';
 import { cn } from '@documenso/ui/lib/utils';
 import { Card, CardContent } from '@documenso/ui/primitives/card';
 import { DocumentFlowFormContainer } from '@documenso/ui/primitives/document-flow/document-flow-root';
 import type { DocumentFlowStep } from '@documenso/ui/primitives/document-flow/types';
-import { PDFViewer } from '@documenso/ui/primitives/pdf-viewer';
 import { Stepper } from '@documenso/ui/primitives/stepper';
 import { AddTemplateFieldsFormPartial } from '@documenso/ui/primitives/template-flow/add-template-fields';
 import type { TAddTemplateFieldsFormSchema } from '@documenso/ui/primitives/template-flow/add-template-fields.types';
@@ -25,30 +17,30 @@ import type { TAddTemplatePlacholderRecipientsFormSchema } from '@documenso/ui/p
 import { AddTemplateSettingsFormPartial } from '@documenso/ui/primitives/template-flow/add-template-settings';
 import type { TAddTemplateSettingsFormSchema } from '@documenso/ui/primitives/template-flow/add-template-settings.types';
 import { useToast } from '@documenso/ui/primitives/use-toast';
+import { msg } from '@lingui/core/macro';
+import { useLingui } from '@lingui/react';
+import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router';
+import { z } from 'zod';
 
-import { useOptionalCurrentTeam } from '~/providers/team';
+import PDFViewerLazy from '~/components/general/pdf-viewer/pdf-viewer-lazy';
+import { useCurrentTeam } from '~/providers/team';
 
 export type TemplateEditFormProps = {
   className?: string;
   initialTemplate: TTemplate;
-  isEnterprise: boolean;
   templateRootPath: string;
 };
 
 type EditTemplateStep = 'settings' | 'signers' | 'fields';
 const EditTemplateSteps: EditTemplateStep[] = ['settings', 'signers', 'fields'];
 
-export const TemplateEditForm = ({
-  initialTemplate,
-  className,
-  isEnterprise,
-  templateRootPath,
-}: TemplateEditFormProps) => {
+export const TemplateEditForm = ({ initialTemplate, className, templateRootPath }: TemplateEditFormProps) => {
   const { _ } = useLingui();
   const { toast } = useToast();
 
   const navigate = useNavigate();
-  const team = useOptionalCurrentTeam();
+  const team = useCurrentTeam();
 
   const [step, setStep] = useState<EditTemplateStep>('settings');
 
@@ -100,7 +92,7 @@ export const TemplateEditForm = ({
     },
   });
 
-  const { mutateAsync: addTemplateFields } = trpc.field.addTemplateFields.useMutation({
+  const { mutateAsync: addTemplateFields } = trpc.field.setFieldsForTemplate.useMutation({
     ...DO_NOT_INVALIDATE_QUERY_ON_MUTATION,
     onSuccess: (newData) => {
       utils.template.getTemplateById.setData(
@@ -124,27 +116,35 @@ export const TemplateEditForm = ({
     },
   });
 
-  const onAddSettingsFormSubmit = async (data: TAddTemplateSettingsFormSchema) => {
+  const saveSettingsData = async (data: TAddTemplateSettingsFormSchema) => {
     const { signatureTypes } = data.meta;
 
+    const parsedGlobalAccessAuth = z.array(ZDocumentAccessAuthTypesSchema).safeParse(data.globalAccessAuth);
+
+    return updateTemplateSettings({
+      templateId: template.id,
+      data: {
+        title: data.title,
+        type: data.templateType,
+        externalId: data.externalId || null,
+        visibility: data.visibility,
+        globalAccessAuth: parsedGlobalAccessAuth.success ? parsedGlobalAccessAuth.data : [],
+        globalActionAuth: data.globalActionAuth ?? [],
+      },
+      meta: {
+        ...data.meta,
+        emailReplyTo: data.meta.emailReplyTo || null,
+        typedSignatureEnabled: signatureTypes.includes(DocumentSignatureType.TYPE),
+        uploadSignatureEnabled: signatureTypes.includes(DocumentSignatureType.UPLOAD),
+        drawSignatureEnabled: signatureTypes.includes(DocumentSignatureType.DRAW),
+        language: isValidLanguageCode(data.meta.language) ? data.meta.language : undefined,
+      },
+    });
+  };
+
+  const onAddSettingsFormSubmit = async (data: TAddTemplateSettingsFormSchema) => {
     try {
-      await updateTemplateSettings({
-        templateId: template.id,
-        data: {
-          title: data.title,
-          externalId: data.externalId || null,
-          visibility: data.visibility,
-          globalAccessAuth: data.globalAccessAuth ?? null,
-          globalActionAuth: data.globalActionAuth ?? null,
-        },
-        meta: {
-          ...data.meta,
-          typedSignatureEnabled: signatureTypes.includes(DocumentSignatureType.TYPE),
-          uploadSignatureEnabled: signatureTypes.includes(DocumentSignatureType.UPLOAD),
-          drawSignatureEnabled: signatureTypes.includes(DocumentSignatureType.DRAW),
-          language: isValidLanguageCode(data.meta.language) ? data.meta.language : undefined,
-        },
-      });
+      await saveSettingsData(data);
 
       setStep('signers');
     } catch (err) {
@@ -158,24 +158,45 @@ export const TemplateEditForm = ({
     }
   };
 
-  const onAddTemplatePlaceholderFormSubmit = async (
-    data: TAddTemplatePlacholderRecipientsFormSchema,
-  ) => {
+  const onAddSettingsFormAutoSave = async (data: TAddTemplateSettingsFormSchema) => {
     try {
-      await Promise.all([
-        updateTemplateSettings({
-          templateId: template.id,
-          meta: {
-            signingOrder: data.signingOrder,
-            allowDictateNextSigner: data.allowDictateNextSigner,
-          },
-        }),
+      await saveSettingsData(data);
+    } catch (err) {
+      console.error(err);
 
-        setRecipients({
-          templateId: template.id,
-          recipients: data.signers,
-        }),
-      ]);
+      toast({
+        title: _(msg`Error`),
+        description: _(msg`An error occurred while auto-saving the template settings.`),
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const saveTemplatePlaceholderData = async (data: TAddTemplatePlacholderRecipientsFormSchema) => {
+    const [, recipients] = await Promise.all([
+      updateTemplateSettings({
+        templateId: template.id,
+        meta: {
+          signingOrder: data.signingOrder,
+          allowDictateNextSigner: data.allowDictateNextSigner,
+        },
+      }),
+
+      setRecipients({
+        templateId: template.id,
+        recipients: data.signers.map((signer) => ({
+          ...signer,
+          id: signer.nativeId,
+        })),
+      }),
+    ]);
+
+    return recipients;
+  };
+
+  const onAddTemplatePlaceholderFormSubmit = async (data: TAddTemplatePlacholderRecipientsFormSchema) => {
+    try {
+      await saveTemplatePlaceholderData(data);
 
       setStep('fields');
     } catch (err) {
@@ -187,12 +208,50 @@ export const TemplateEditForm = ({
     }
   };
 
+  const onAddTemplatePlaceholderFormAutoSave = async (data: TAddTemplatePlacholderRecipientsFormSchema) => {
+    try {
+      return await saveTemplatePlaceholderData(data);
+    } catch (err) {
+      console.error(err);
+
+      toast({
+        title: _(msg`Error`),
+        description: _(msg`An error occurred while auto-saving the template placeholders.`),
+        variant: 'destructive',
+      });
+
+      throw err;
+    }
+  };
+
+  const saveFieldsData = async (data: TAddTemplateFieldsFormSchema) => {
+    return addTemplateFields({
+      templateId: template.id,
+      fields: data.fields.map((field) => ({
+        ...field,
+        id: field.nativeId,
+        envelopeItemId: template.templateDocumentData.envelopeItemId,
+      })),
+    });
+  };
+
+  const onAddFieldsFormAutoSave = async (data: TAddTemplateFieldsFormSchema) => {
+    try {
+      await saveFieldsData(data);
+    } catch (err) {
+      console.error(err);
+
+      toast({
+        title: _(msg`Error`),
+        description: _(msg`An error occurred while auto-saving the template fields.`),
+        variant: 'destructive',
+      });
+    }
+  };
+
   const onAddFieldsFormSubmit = async (data: TAddTemplateFieldsFormSchema) => {
     try {
-      await addTemplateFields({
-        templateId: template.id,
-        fields: data.fields,
-      });
+      await saveFieldsData(data);
 
       // Clear all field data from localStorage
       for (let i = 0; i < localStorage.length; i++) {
@@ -208,9 +267,7 @@ export const TemplateEditForm = ({
         duration: 5000,
       });
 
-      const templatePath = template.folderId
-        ? `${templateRootPath}/f/${template.folderId}`
-        : templateRootPath;
+      const templatePath = template.folderId ? `${templateRootPath}/f/${template.folderId}` : templateRootPath;
 
       await navigate(templatePath);
     } catch (err) {
@@ -235,24 +292,26 @@ export const TemplateEditForm = ({
 
   return (
     <div className={cn('grid w-full grid-cols-12 gap-8', className)}>
-      <Card
-        className="relative col-span-12 rounded-xl before:rounded-xl lg:col-span-6 xl:col-span-7"
-        gradient
-      >
+      <Card className="relative col-span-12 rounded-xl before:rounded-xl lg:col-span-6 xl:col-span-7" gradient>
         <CardContent className="p-2">
-          <PDFViewer
-            key={templateDocumentData.id}
-            documentData={templateDocumentData}
+          <PDFViewerLazy
+            key={template.envelopeItems[0]?.id}
+            data={getDocumentDataUrlForPdfViewer({
+              envelopeId: template.envelopeId,
+              envelopeItemId: template.envelopeItems[0]?.id,
+              documentDataId: initialTemplate.templateDocumentDataId,
+              version: 'current',
+              token: undefined,
+              presignToken: undefined,
+            })}
+            scrollParentRef="window"
             onDocumentLoad={() => setIsDocumentPdfLoaded(true)}
           />
         </CardContent>
       </Card>
 
       <div className="col-span-12 lg:col-span-6 xl:col-span-5">
-        <DocumentFlowFormContainer
-          className="lg:h-[calc(100vh-6rem)]"
-          onSubmit={(e) => e.preventDefault()}
-        >
+        <DocumentFlowFormContainer className="lg:h-[calc(100vh-6rem)]" onSubmit={(e) => e.preventDefault()}>
           <Stepper
             currentStep={currentDocumentFlow.stepIndex}
             setCurrentStep={(step) => setStep(EditTemplateSteps[step - 1])}
@@ -260,17 +319,17 @@ export const TemplateEditForm = ({
             <AddTemplateSettingsFormPartial
               key={recipients.length}
               template={template}
-              currentTeamMemberRole={team?.currentTeamMember?.role}
+              currentTeamMemberRole={team.currentTeamRole}
               documentFlow={documentFlow.settings}
               recipients={recipients}
               fields={fields}
               onSubmit={onAddSettingsFormSubmit}
-              isEnterprise={isEnterprise}
+              onAutoSave={onAddSettingsFormAutoSave}
               isDocumentPdfLoaded={isDocumentPdfLoaded}
             />
 
             <AddTemplatePlaceholderRecipientsFormPartial
-              key={recipients.length}
+              key={template.id}
               documentFlow={documentFlow.signers}
               recipients={recipients}
               fields={fields}
@@ -278,16 +337,17 @@ export const TemplateEditForm = ({
               allowDictateNextSigner={template.templateMeta?.allowDictateNextSigner}
               templateDirectLink={template.directLink}
               onSubmit={onAddTemplatePlaceholderFormSubmit}
-              isEnterprise={isEnterprise}
+              onAutoSave={onAddTemplatePlaceholderFormAutoSave}
               isDocumentPdfLoaded={isDocumentPdfLoaded}
             />
 
             <AddTemplateFieldsFormPartial
-              key={fields.length}
+              key={template.id}
               documentFlow={documentFlow.fields}
               recipients={recipients}
               fields={fields}
               onSubmit={onAddFieldsFormSubmit}
+              onAutoSave={onAddFieldsFormAutoSave}
               teamId={team?.id}
             />
           </Stepper>

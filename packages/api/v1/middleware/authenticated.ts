@@ -1,10 +1,13 @@
-import type { Team, User } from '@prisma/client';
-import type { TsRestRequest } from '@ts-rest/serverless';
-
 import { AppError, AppErrorCode } from '@documenso/lib/errors/app-error';
 import { getApiTokenByToken } from '@documenso/lib/server-only/public-api/get-api-token-by-token';
+import type { BaseApiLog, RootApiLog } from '@documenso/lib/types/api-logs';
 import type { ApiRequestMetadata } from '@documenso/lib/universal/extract-request-metadata';
 import { extractRequestMetadata } from '@documenso/lib/universal/extract-request-metadata';
+import { nanoid } from '@documenso/lib/universal/id';
+import { logger } from '@documenso/lib/utils/logger';
+import type { Team, User } from '@prisma/client';
+import type { TsRestRequest } from '@ts-rest/serverless';
+import type { Logger } from 'pino';
 
 type B = {
   // appRoute: any;
@@ -25,12 +28,26 @@ export const authenticatedMiddleware = <
 >(
   handler: (
     args: T & { req: TsRestRequest },
-    user: User,
-    team: Team | null | undefined,
-    options: { metadata: ApiRequestMetadata },
+    user: Pick<User, 'id' | 'email' | 'name' | 'disabled'>,
+    team: Team,
+    options: { metadata: ApiRequestMetadata; logger: Logger },
   ) => Promise<R>,
 ) => {
   return async (args: T, { request }: B) => {
+    const requestMetadata = extractRequestMetadata(request);
+
+    const apiLogger = logger.child({
+      ipAddress: requestMetadata.ipAddress,
+      userAgent: requestMetadata.userAgent,
+      requestId: nanoid(),
+    } satisfies RootApiLog);
+
+    const infoToLog: BaseApiLog = {
+      auth: 'api',
+      source: 'apiV1',
+      path: request.url,
+    };
+
     try {
       const { authorization } = args.headers;
 
@@ -51,8 +68,14 @@ export const authenticatedMiddleware = <
         });
       }
 
+      apiLogger.info({
+        ...infoToLog,
+        userId: apiToken.user.id,
+        apiTokenId: apiToken.id,
+      } satisfies BaseApiLog);
+
       const metadata: ApiRequestMetadata = {
-        requestMetadata: extractRequestMetadata(request),
+        requestMetadata,
         source: 'apiV1',
         auth: 'api',
         auditUser: {
@@ -69,14 +92,25 @@ export const authenticatedMiddleware = <
         },
         apiToken.user,
         apiToken.team,
-        { metadata },
+        { metadata, logger: apiLogger },
       );
     } catch (err) {
-      console.log({ err: err });
+      apiLogger.info({
+        ...infoToLog,
+        error: err,
+      });
 
       let message = 'Unauthorized';
 
       if (err instanceof AppError) {
+        if (err.code === AppErrorCode.TOO_MANY_REQUESTS) {
+          return {
+            status: 429,
+            body: { message: err.message },
+            headers: err.headers,
+          } as const;
+        }
+
         message = err.message;
       }
 

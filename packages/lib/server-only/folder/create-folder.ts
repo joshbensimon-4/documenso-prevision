@@ -1,16 +1,14 @@
-import { TeamMemberRole } from '@prisma/client';
-import type { Team, TeamGlobalSettings } from '@prisma/client';
-
-import { AppError, AppErrorCode } from '@documenso/lib/errors/app-error';
 import { prisma } from '@documenso/prisma';
 
+import { AppError, AppErrorCode } from '../../errors/app-error';
 import type { TFolderType } from '../../types/folder-type';
 import { FolderType } from '../../types/folder-type';
-import { determineDocumentVisibility } from '../../utils/document-visibility';
+import { buildTeamWhereQuery } from '../../utils/teams';
+import { getTeamSettings } from '../team/get-team-settings';
 
 export interface CreateFolderOptions {
   userId: number;
-  teamId?: number;
+  teamId: number;
   name: string;
   parentId?: string | null;
   type?: TFolderType;
@@ -23,51 +21,28 @@ export const createFolder = async ({
   parentId,
   type = FolderType.DOCUMENT,
 }: CreateFolderOptions) => {
-  const user = await prisma.user.findFirstOrThrow({
-    where: {
-      id: userId,
-    },
-    include: {
-      teamMembers: {
-        select: {
-          teamId: true,
-        },
-      },
-    },
-  });
+  // This indirectly verifies whether the user has access to the team.
+  const settings = await getTeamSettings({ userId, teamId });
 
-  if (
-    teamId !== undefined &&
-    !user.teamMembers.some((teamMember) => teamMember.teamId === teamId)
-  ) {
-    throw new AppError(AppErrorCode.NOT_FOUND, {
-      message: 'Team not found',
-    });
-  }
-
-  let team: (Team & { teamGlobalSettings: TeamGlobalSettings | null }) | null = null;
-  let userTeamRole: TeamMemberRole | undefined;
-
-  if (teamId) {
-    const teamWithUserRole = await prisma.team.findFirstOrThrow({
+  if (parentId) {
+    const parentFolder = await prisma.folder.findFirst({
       where: {
-        id: teamId,
-      },
-      include: {
-        teamGlobalSettings: true,
-        members: {
-          where: {
-            userId: userId,
-          },
-          select: {
-            role: true,
-          },
-        },
+        id: parentId,
+        team: buildTeamWhereQuery({ teamId, userId }),
       },
     });
 
-    team = teamWithUserRole;
-    userTeamRole = teamWithUserRole.members[0]?.role;
+    if (!parentFolder) {
+      throw new AppError(AppErrorCode.NOT_FOUND, {
+        message: 'Parent folder not found',
+      });
+    }
+
+    if (parentFolder.type !== type) {
+      throw new AppError(AppErrorCode.INVALID_BODY, {
+        message: 'Parent folder type does not match the folder type',
+      });
+    }
   }
 
   return await prisma.folder.create({
@@ -77,10 +52,7 @@ export const createFolder = async ({
       teamId,
       parentId,
       type,
-      visibility: determineDocumentVisibility(
-        team?.teamGlobalSettings?.documentVisibility,
-        userTeamRole ?? TeamMemberRole.MEMBER,
-      ),
+      visibility: settings.documentVisibility,
     },
   });
 };

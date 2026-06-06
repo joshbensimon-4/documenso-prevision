@@ -1,7 +1,6 @@
+import { prisma } from '@documenso/prisma';
 import { compare, hash } from '@node-rs/bcrypt';
 import { UserSecurityAuditLogType } from '@prisma/client';
-
-import { prisma } from '@documenso/prisma';
 
 import { SALT_ROUNDS } from '../../constants/auth';
 import { AppError, AppErrorCode } from '../../errors/app-error';
@@ -24,7 +23,14 @@ export const resetPassword = async ({ token, password, requestMetadata }: ResetP
       token,
     },
     include: {
-      user: true,
+      user: {
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          password: true,
+        },
+      },
     },
   });
 
@@ -70,12 +76,16 @@ export const resetPassword = async ({ token, password, requestMetadata }: ResetP
         ipAddress: requestMetadata?.ipAddress,
       },
     });
-
-    await jobsClient.triggerJob({
-      name: 'send.password.reset.success.email',
-      payload: {
-        userId: foundToken.userId,
-      },
-    });
   });
+
+  await jobsClient.triggerJob({
+    name: 'send.password.reset.success.email',
+    payload: {
+      userId: foundToken.userId,
+    },
+  });
+
+  return {
+    userId: foundToken.userId,
+  };
 };

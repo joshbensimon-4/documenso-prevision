@@ -1,88 +1,68 @@
-import type { Recipient } from '@prisma/client';
-import { RecipientRole } from '@prisma/client';
-
-import { isUserEnterprise } from '@documenso/ee/server-only/util/is-document-enterprise';
 import {
   DIRECT_TEMPLATE_RECIPIENT_EMAIL,
   DIRECT_TEMPLATE_RECIPIENT_NAME,
 } from '@documenso/lib/constants/direct-templates';
 import { prisma } from '@documenso/prisma';
+import type { Recipient } from '@prisma/client';
+import { EnvelopeType, RecipientRole } from '@prisma/client';
 
 import { AppError, AppErrorCode } from '../../errors/app-error';
-import {
-  type TRecipientActionAuthTypes,
-  ZRecipientAuthOptionsSchema,
-} from '../../types/document-auth';
+import { type TRecipientActionAuthTypes, ZRecipientAuthOptionsSchema } from '../../types/document-auth';
 import { nanoid } from '../../universal/id';
 import { createRecipientAuthOptions } from '../../utils/document-auth';
+import { type EnvelopeIdOptions, mapSecondaryIdToTemplateId } from '../../utils/envelope';
+import { getEnvelopeWhereInput } from '../envelope/get-envelope-by-id';
 
 export type SetTemplateRecipientsOptions = {
   userId: number;
-  teamId?: number;
-  templateId: number;
-  recipients: {
-    id?: number;
-    email: string;
-    name: string;
-    role: RecipientRole;
-    signingOrder?: number | null;
-    actionAuth?: TRecipientActionAuthTypes | null;
-  }[];
+  teamId: number;
+  id: EnvelopeIdOptions;
+  recipients: RecipientData[];
 };
 
-export const setTemplateRecipients = async ({
-  userId,
-  teamId,
-  templateId,
-  recipients,
-}: SetTemplateRecipientsOptions) => {
-  const template = await prisma.template.findFirst({
-    where: {
-      id: templateId,
-      ...(teamId
-        ? {
-            team: {
-              id: teamId,
-              members: {
-                some: {
-                  userId,
-                },
-              },
-            },
-          }
-        : {
-            userId,
-            teamId: null,
-          }),
-    },
+export const setTemplateRecipients = async ({ userId, teamId, id, recipients }: SetTemplateRecipientsOptions) => {
+  const { envelopeWhereInput } = await getEnvelopeWhereInput({
+    id,
+    type: EnvelopeType.TEMPLATE,
+    userId,
+    teamId,
+  });
+
+  const envelope = await prisma.envelope.findFirst({
+    where: envelopeWhereInput,
     include: {
       directLink: true,
+      team: {
+        select: {
+          organisation: {
+            select: {
+              organisationClaim: true,
+            },
+          },
+        },
+      },
+      recipients: true,
     },
   });
 
-  if (!template) {
+  if (!envelope) {
     throw new Error('Template not found');
   }
 
-  const recipientsHaveActionAuth = recipients.some((recipient) => recipient.actionAuth);
+  const recipientsHaveActionAuth = recipients.some(
+    (recipient) => recipient.actionAuth && recipient.actionAuth.length > 0,
+  );
 
   // Check if user has permission to set the global action auth.
-  if (recipientsHaveActionAuth) {
-    const isDocumentEnterprise = await isUserEnterprise({
-      userId,
-      teamId,
+  if (recipientsHaveActionAuth && !envelope.team.organisation.organisationClaim.flags.cfr21) {
+    throw new AppError(AppErrorCode.UNAUTHORIZED, {
+      message: 'You do not have permission to set the action auth',
     });
-
-    if (!isDocumentEnterprise) {
-      throw new AppError(AppErrorCode.UNAUTHORIZED, {
-        message: 'You do not have permission to set the action auth',
-      });
-    }
   }
 
   const normalizedRecipients = recipients.map((recipient) => {
     // Force replace any changes to the name or email of the direct recipient.
-    if (template.directLink && recipient.id === template.directLink.directTemplateRecipientId) {
+    if (envelope.directLink && recipient.id === envelope.directLink.directTemplateRecipientId) {
       return {
         ...recipient,
         email: DIRECT_TEMPLATE_RECIPIENT_EMAIL,
@@ -96,27 +76,19 @@ export const setTemplateRecipients = async ({
     };
   });
 
-  const existingRecipients = await prisma.recipient.findMany({
-    where: {
-      templateId,
-    },
-  });
+  const existingRecipients = envelope.recipients;
 
   const removedRecipients = existingRecipients.filter(
-    (existingRecipient) =>
-      !normalizedRecipients.find(
-        (recipient) =>
-          recipient.id === existingRecipient.id || recipient.email === existingRecipient.email,
-      ),
+    (existingRecipient) => !normalizedRecipients.find((recipient) => recipient.id === existingRecipient.id),
   );
 
-  if (template.directLink !== null) {
+  if (envelope.directLink !== null) {
     const updatedDirectRecipient = recipients.find(
-      (recipient) => recipient.id === template.directLink?.directTemplateRecipientId,
+      (recipient) => recipient.id === envelope.directLink?.directTemplateRecipientId,
     );
 
     const deletedDirectRecipient = removedRecipients.find(
-      (recipient) => recipient.id === template.directLink?.directTemplateRecipientId,
+      (recipient) => recipient.id === envelope.directLink?.directTemplateRecipientId,
     );
 
     if (updatedDirectRecipient?.role === RecipientRole.CC) {
@@ -133,10 +105,7 @@ export const setTemplateRecipients = async ({
   }
 
   const linkedRecipients = normalizedRecipients.map((recipient) => {
-    const existing = existingRecipients.find(
-      (existingRecipient) =>
-        existingRecipient.id === recipient.id || existingRecipient.email === recipient.email,
-    );
+    const existing = existingRecipients.find((existingRecipient) => existingRecipient.id === recipient.id);
 
     return {
       ...recipient,
@@ -159,14 +128,14 @@ export const setTemplateRecipients = async ({
         const upsertedRecipient = await tx.recipient.upsert({
           where: {
             id: recipient._persisted?.id ?? -1,
-            templateId,
+            envelopeId: envelope.id,
           },
           update: {
             name: recipient.name,
             email: recipient.email,
             role: recipient.role,
             signingOrder: recipient.signingOrder,
-            templateId,
+            envelopeId: envelope.id,
             authOptions,
           },
           create: {
@@ -175,7 +144,7 @@ export const setTemplateRecipients = async ({
             role: recipient.role,
             signingOrder: recipient.signingOrder,
             token: nanoid(),
-            templateId,
+            envelopeId: envelope.id,
             authOptions,
           },
         });
@@ -195,7 +164,10 @@ export const setTemplateRecipients = async ({
           });
         }
 
-        return upsertedRecipient;
+        return {
+          ...upsertedRecipient,
+          clientId: recipient.clientId,
+        };
       }),
     );
   });
@@ -211,18 +183,32 @@ export const setTemplateRecipients = async ({
   }
 
   // Filter out recipients that have been removed or have been updated.
-  const filteredRecipients: Recipient[] = existingRecipients.filter((recipient) => {
-    const isRemoved = removedRecipients.find(
-      (removedRecipient) => removedRecipient.id === recipient.id,
-    );
-    const isUpdated = persistedRecipients.find(
-      (persistedRecipient) => persistedRecipient.id === recipient.id,
-    );
+  const filteredRecipients: RecipientDataWithClientId[] = existingRecipients.filter((recipient) => {
+    const isRemoved = removedRecipients.find((removedRecipient) => removedRecipient.id === recipient.id);
+    const isUpdated = persistedRecipients.find((persistedRecipient) => persistedRecipient.id === recipient.id);
 
     return !isRemoved && !isUpdated;
   });
 
   return {
-    recipients: [...filteredRecipients, ...persistedRecipients],
+    recipients: [...filteredRecipients, ...persistedRecipients].map((recipient) => ({
+      ...recipient,
+      documentId: null,
+      templateId: mapSecondaryIdToTemplateId(envelope.secondaryId),
+    })),
   };
+};
+
+type RecipientData = {
+  id?: number;
+  clientId?: string | null;
+  email: string;
+  name: string;
+  role: RecipientRole;
+  signingOrder?: number | null;
+  actionAuth?: TRecipientActionAuthTypes[];
+};
+
+type RecipientDataWithClientId = Recipient & {
+  clientId?: string | null;
 };

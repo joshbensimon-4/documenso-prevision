@@ -12,12 +12,11 @@
     "test": "vitest"
   },
   "dependencies": {
-    "@documenso/tsconfig": "*",
-    "@documenso/pdf-sign": "^0.1.0",
-    "pdf-lib": "^1.17.1",
-    "ts-pattern": "^5.0.5"
+    "@google-cloud/kms": "^5.2.1",
+    "@google-cloud/secret-manager": "^6.1.1",
+    "ts-pattern": "^5.9.0"
   },
   "devDependencies": {
-    "vitest": "^2.1.8"
+    "@documenso/tsconfig": "*"
   }
 }

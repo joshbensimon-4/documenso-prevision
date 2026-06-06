@@ -1,14 +1,13 @@
-import { expect, test } from '@playwright/test';
-
 import { seedPendingDocument } from '@documenso/prisma/seed/documents';
 import { seedUser } from '@documenso/prisma/seed/users';
+import { expect, test } from '@playwright/test';
 
 import { apiSignin } from '../fixtures/authentication';
 
 test('[COMMAND_MENU]: should see sent documents', async ({ page }) => {
-  const user = await seedUser();
-  const recipient = await seedUser();
-  const document = await seedPendingDocument(user, [recipient]);
+  const { user, team } = await seedUser();
+  const { user: recipient } = await seedUser();
+  const document = await seedPendingDocument(user, team.id, [recipient]);
 
   await apiSignin({
     page,
@@ -22,9 +21,9 @@ test('[COMMAND_MENU]: should see sent documents', async ({ page }) => {
 });
 
 test('[COMMAND_MENU]: should see received documents', async ({ page }) => {
-  const user = await seedUser();
-  const recipient = await seedUser();
-  const document = await seedPendingDocument(user, [recipient]);
+  const { user, team } = await seedUser();
+  const { user: recipient } = await seedUser();
+  const document = await seedPendingDocument(user, team.id, [recipient]);
 
   await apiSignin({
     page,
@@ -38,13 +37,13 @@ test('[COMMAND_MENU]: should see received documents', async ({ page }) => {
 });
 
 test('[COMMAND_MENU]: should be able to search by recipient', async ({ page }) => {
-  const user = await seedUser();
-  const recipient = await seedUser();
-  const document = await seedPendingDocument(user, [recipient]);
+  const { user, team } = await seedUser();
+  const { user: recipient } = await seedUser();
+  const document = await seedPendingDocument(user, team.id, [recipient]);
 
   await apiSignin({
     page,
-    email: recipient.email,
+    email: user.email,
   });
 
   await page.keyboard.press('Meta+K');

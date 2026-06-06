@@ -1,9 +1,9 @@
+import { AppError, AppErrorCode } from '@documenso/lib/errors/app-error';
+import type { RequestMetadata } from '@documenso/lib/universal/extract-request-metadata';
+import { prisma } from '@documenso/prisma';
 import { sha256 } from '@oslojs/crypto/sha2';
 import { encodeBase32LowerCaseNoPadding, encodeHexLowerCase } from '@oslojs/encoding';
 import { type Session, type User, UserSecurityAuditLogType } from '@prisma/client';
-
-import type { RequestMetadata } from '@documenso/lib/universal/extract-request-metadata';
-import { prisma } from '@documenso/prisma';
 
 import { AUTH_SESSION_LIFETIME } from '../../config';
 
@@ -14,16 +14,7 @@ import { AUTH_SESSION_LIFETIME } from '../../config';
  */
 export type SessionUser = Pick<
   User,
-  | 'id'
-  | 'name'
-  | 'email'
-  | 'emailVerified'
-  | 'avatarImageId'
-  | 'twoFactorEnabled'
-  | 'roles'
-  | 'signature'
-  | 'url'
-  | 'customerId'
+  'id' | 'name' | 'email' | 'emailVerified' | 'avatarImageId' | 'twoFactorEnabled' | 'roles' | 'signature' | 'disabled'
 >;
 
 export type SessionValidationResult =
@@ -44,11 +35,7 @@ export const generateSessionToken = (): string => {
   return token;
 };
 
-export const createSession = async (
-  token: string,
-  userId: number,
-  metadata: RequestMetadata,
-): Promise<Session> => {
+export const createSession = async (token: string, userId: number, metadata: RequestMetadata): Promise<Session> => {
   const hashedSessionId = encodeHexLowerCase(sha256(new TextEncoder().encode(token)));
 
   const session: Session = {
@@ -99,8 +86,7 @@ export const validateSessionToken = async (token: string): Promise<SessionValida
           twoFactorEnabled: true,
           roles: true,
           signature: true,
-          url: true,
-          customerId: true,
+          disabled: true,
         },
       },
     },
@@ -133,18 +119,44 @@ export const validateSessionToken = async (token: string): Promise<SessionValida
   return { session, user, isAuthenticated: true };
 };
 
-export const invalidateSession = async (
-  sessionId: string,
-  metadata: RequestMetadata,
-): Promise<void> => {
-  const session = await prisma.session.delete({ where: { id: sessionId } });
+type InvalidateSessionsOptions = {
+  userId: number;
+  sessionIds: string[];
+  metadata: RequestMetadata;
+  isRevoke?: boolean;
+};
 
-  await prisma.userSecurityAuditLog.create({
-    data: {
-      userId: session.userId,
-      ipAddress: metadata.ipAddress,
-      userAgent: metadata.userAgent,
-      type: UserSecurityAuditLogType.SIGN_OUT,
-    },
+export const invalidateSessions = async ({
+  userId,
+  sessionIds,
+  metadata,
+  isRevoke,
+}: InvalidateSessionsOptions): Promise<void> => {
+  if (sessionIds.length === 0) {
+    return;
+  }
+
+  await prisma.$transaction(async (tx) => {
+    const { count } = await tx.session.deleteMany({
+      where: {
+        userId,
+        id: { in: sessionIds },
+      },
+    });
+
+    if (count !== sessionIds.length) {
+      throw new AppError(AppErrorCode.INVALID_REQUEST, {
+        message: 'One or more sessions are not valid.',
+      });
+    }
+
+    await tx.userSecurityAuditLog.createMany({
+      data: sessionIds.map(() => ({
+        userId,
+        ipAddress: metadata.ipAddress,
+        userAgent: metadata.userAgent,
+        type: isRevoke ? UserSecurityAuditLogType.SESSION_REVOKED : UserSecurityAuditLogType.SIGN_OUT,
+      })),
+    });
   });
 };

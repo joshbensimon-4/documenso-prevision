@@ -1,5 +1,3 @@
-import TemplateEditPage, { loader } from '~/routes/_authenticated+/templates.$id.edit';
+import EnvelopeEditorPage from './documents.$id.edit';
 
-export { loader };
-
-export default TemplateEditPage;
+export default EnvelopeEditorPage;

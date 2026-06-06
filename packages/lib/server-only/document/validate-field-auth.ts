@@ -1,14 +1,13 @@
-import type { Document, Field, Recipient } from '@prisma/client';
+import type { Envelope, Field, Recipient } from '@prisma/client';
 import { FieldType } from '@prisma/client';
 
 import { AppError, AppErrorCode } from '../../errors/app-error';
 import type { TRecipientActionAuth } from '../../types/document-auth';
-import { extractDocumentAuthMethods } from '../../utils/document-auth';
 import { isRecipientAuthorized } from './is-recipient-authorized';
 
 export type ValidateFieldAuthOptions = {
-  documentAuthOptions: Document['authOptions'];
-  recipient: Pick<Recipient, 'authOptions' | 'email'>;
+  documentAuthOptions: Envelope['authOptions'];
+  recipient: Pick<Recipient, 'authOptions' | 'email' | 'envelopeId'>;
   field: Field;
   userId?: number;
   authOptions?: TRecipientActionAuth;
@@ -26,14 +25,9 @@ export const validateFieldAuth = async ({
   userId,
   authOptions,
 }: ValidateFieldAuthOptions) => {
-  const { derivedRecipientActionAuth } = extractDocumentAuthMethods({
-    documentAuth: documentAuthOptions,
-    recipientAuth: recipient.authOptions,
-  });
-
   // Override all non-signature fields to not require any auth.
   if (field.type !== FieldType.SIGNATURE) {
-    return null;
+    return undefined;
   }
 
   const isValid = await isRecipientAuthorized({
@@ -50,5 +44,5 @@ export const validateFieldAuth = async ({
     });
   }
 
-  return derivedRecipientActionAuth;
+  return authOptions?.type;
 };

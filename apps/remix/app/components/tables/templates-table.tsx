@@ -1,25 +1,25 @@
-import { useMemo, useTransition } from 'react';
-
-import { msg } from '@lingui/core/macro';
-import { useLingui } from '@lingui/react';
-import { Trans } from '@lingui/react/macro';
-import { AlertTriangle, Globe2Icon, InfoIcon, Link2Icon, Loader, LockIcon } from 'lucide-react';
-import { Link } from 'react-router';
-
 import { useLimits } from '@documenso/ee/server-only/limits/provider/client';
 import { useUpdateSearchParams } from '@documenso/lib/client-only/hooks/use-update-search-params';
+import { useCurrentOrganisation } from '@documenso/lib/client-only/providers/organisation';
 import { formatTemplatesPath } from '@documenso/lib/utils/teams';
 import type { TFindTemplatesResponse } from '@documenso/trpc/server/template-router/schema';
 import { Alert, AlertDescription, AlertTitle } from '@documenso/ui/primitives/alert';
-import type { DataTableColumnDef } from '@documenso/ui/primitives/data-table';
+import { Checkbox } from '@documenso/ui/primitives/checkbox';
+import type { DataTableColumnDef, RowSelectionState } from '@documenso/ui/primitives/data-table';
 import { DataTable } from '@documenso/ui/primitives/data-table';
 import { DataTablePagination } from '@documenso/ui/primitives/data-table-pagination';
 import { Skeleton } from '@documenso/ui/primitives/skeleton';
 import { TableCell } from '@documenso/ui/primitives/table';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@documenso/ui/primitives/tooltip';
+import { msg } from '@lingui/core/macro';
+import { useLingui } from '@lingui/react';
+import { Trans } from '@lingui/react/macro';
+import { AlertTriangle, Building2Icon, Globe2Icon, InfoIcon, Link2Icon, Loader, LockIcon } from 'lucide-react';
+import { useMemo, useTransition } from 'react';
+import { Link } from 'react-router';
 
 import { TemplateType } from '~/components/general/template/template-type';
-import { useOptionalCurrentTeam } from '~/providers/team';
+import { useCurrentTeam } from '~/providers/team';
 
 import { TemplateUseDialog } from '../dialogs/template-use-dialog';
 import { TemplateDirectLinkBadge } from '../general/template/template-direct-link-badge';
@@ -31,6 +31,9 @@ type TemplatesTableProps = {
   isLoadingError?: boolean;
   documentRootPath: string;
   templateRootPath: string;
+  enableSelection?: boolean;
+  rowSelection?: RowSelectionState;
+  onRowSelectionChange?: (selection: RowSelectionState) => void;
 };
 
 type TemplatesTableRow = TFindTemplatesResponse['data'][number];
@@ -41,29 +44,55 @@ export const TemplatesTable = ({
   isLoadingError,
   documentRootPath,
   templateRootPath,
+  enableSelection,
+  rowSelection,
+  onRowSelectionChange,
 }: TemplatesTableProps) => {
   const { _, i18n } = useLingui();
   const { remaining } = useLimits();
 
-  const team = useOptionalCurrentTeam();
+  const team = useCurrentTeam();
+  const organisation = useCurrentOrganisation();
 
   const [isPending, startTransition] = useTransition();
 
   const updateSearchParams = useUpdateSearchParams();
 
   const formatTemplateLink = (row: TemplatesTableRow) => {
-    const isCurrentTeamTemplate = team?.url && row.team?.url === team?.url;
-    const path = formatTemplatesPath(isCurrentTeamTemplate ? team?.url : undefined);
+    const path = formatTemplatesPath(team.url);
 
-    if (row.folderId) {
-      return `${path}/f/${row.folderId}/${row.id}`;
-    }
-
-    return `${path}/${row.id}`;
+    return `${path}/${row.envelopeId}`;
   };
 
   const columns = useMemo(() => {
-    return [
+    const cols: DataTableColumnDef<TemplatesTableRow>[] = [];
+
+    if (enableSelection) {
+      cols.push({
+        id: 'select',
+        header: ({ table }) => (
+          <Checkbox
+            checked={table.getIsAllPageRowsSelected()}
+            onCheckedChange={(value) => table.toggleAllPageRowsSelected(!!value)}
+            aria-label={_(msg`Select all`)}
+            onClick={(e) => e.stopPropagation()}
+          />
+        ),
+        cell: ({ row }) => (
+          <Checkbox
+            checked={row.getIsSelected()}
+            onCheckedChange={(value) => row.toggleSelected(!!value)}
+            aria-label={_(msg`Select row`)}
+            onClick={(e) => e.stopPropagation()}
+          />
+        ),
+        enableSorting: false,
+        enableHiding: false,
+        size: 40,
+      });
+    }
+
+    cols.push(
       {
         header: _(msg`Created`),
         accessorKey: 'createdAt',
@@ -89,8 +118,8 @@ export const TemplatesTable = ({
                 <InfoIcon className="mx-2 h-4 w-4" />
               </TooltipTrigger>
 
-              <TooltipContent className="text-foreground max-w-md space-y-2 !p-0">
-                <ul className="text-muted-foreground space-y-0.5 divide-y [&>li]:p-4">
+              <TooltipContent className="!p-0 max-w-md space-y-2 text-foreground">
+                <ul className="space-y-0.5 divide-y text-muted-foreground [&>li]:p-4">
                   <li>
                     <h2 className="mb-2 flex flex-row items-center font-semibold">
                       <Globe2Icon className="mr-2 h-5 w-5 text-green-500 dark:text-green-300" />
@@ -99,8 +128,8 @@ export const TemplatesTable = ({
 
                     <p>
                       <Trans>
-                        Public templates are connected to your public profile. Any modifications to
-                        public templates will also appear in your public profile.
+                        Public templates are connected to your public profile. Any modifications to public templates
+                        will also appear in your public profile.
                       </Trans>
                     </p>
                   </li>
@@ -112,9 +141,8 @@ export const TemplatesTable = ({
 
                     <p>
                       <Trans>
-                        Direct link templates contain one dynamic recipient placeholder. Anyone with
-                        access to this link can sign the document, and it will then appear on your
-                        documents page.
+                        Direct link templates contain one dynamic recipient placeholder. Anyone with access to this link
+                        can sign the document, and it will then appear on your documents page.
                       </Trans>
                     </p>
                   </li>
@@ -126,13 +154,23 @@ export const TemplatesTable = ({
 
                     <p>
                       {team?.id ? (
-                        <Trans>
-                          Team only templates are not linked anywhere and are visible only to your
-                          team.
-                        </Trans>
+                        <Trans>Team only templates are not linked anywhere and are visible only to your team.</Trans>
                       ) : (
                         <Trans>Private templates can only be modified and viewed by you.</Trans>
                       )}
+                    </p>
+                  </li>
+                  <li>
+                    <h2 className="mb-2 flex flex-row items-center font-semibold">
+                      <Building2Icon className="mr-2 h-5 w-5 text-orange-500 dark:text-orange-300" />
+                      <Trans>Organisation</Trans>
+                    </h2>
+
+                    <p>
+                      <Trans>
+                        Organisation templates are shared across all teams within the same organisation. Only the owning
+                        team can edit them.
+                      </Trans>
                     </p>
                   </li>
                 </ul>
@@ -141,19 +179,27 @@ export const TemplatesTable = ({
           </div>
         ),
         accessorKey: 'type',
-        cell: ({ row }) => (
-          <div className="flex flex-row items-center">
-            <TemplateType type={row.original.type} />
+        cell: ({ row }) => {
+          const isFromOtherTeam = row.original.teamId !== team?.id;
 
-            {row.original.directLink?.token && (
-              <TemplateDirectLinkBadge
-                className="ml-2"
-                token={row.original.directLink.token}
-                enabled={row.original.directLink.enabled}
-              />
-            )}
-          </div>
-        ),
+          return (
+            <div className="flex flex-row items-center">
+              <TemplateType type={row.original.type} />
+
+              {isFromOtherTeam && row.original.team?.name && (
+                <span className="ml-2 text-muted-foreground text-xs">({row.original.team.name})</span>
+              )}
+
+              {row.original.directLink?.token && (
+                <TemplateDirectLinkBadge
+                  className="ml-2"
+                  token={row.original.directLink.token}
+                  enabled={row.original.directLink.enabled}
+                />
+              )}
+            </div>
+          );
+        },
       },
       {
         header: _(msg`Actions`),
@@ -162,6 +208,7 @@ export const TemplatesTable = ({
           return (
             <div className="flex items-center gap-x-4">
               <TemplateUseDialog
+                envelopeId={row.original.envelopeId}
                 templateId={row.original.id}
                 templateSigningOrder={row.original.templateMeta?.signingOrder}
                 documentDistributionMethod={row.original.templateMeta?.distributionMethod}
@@ -169,17 +216,15 @@ export const TemplatesTable = ({
                 documentRootPath={documentRootPath}
               />
 
-              <TemplatesTableActionDropdown
-                row={row.original}
-                teamId={team?.id}
-                templateRootPath={templateRootPath}
-              />
+              <TemplatesTableActionDropdown row={row.original} teamId={team?.id} templateRootPath={templateRootPath} />
             </div>
           );
         },
       },
-    ] satisfies DataTableColumnDef<TemplatesTableRow>[];
-  }, [documentRootPath, team?.id, templateRootPath]);
+    );
+
+    return cols;
+  }, [documentRootPath, team?.id, templateRootPath, enableSelection]);
 
   const onPaginationChange = (page: number, perPage: number) => {
     startTransition(() => {
@@ -208,7 +253,7 @@ export const TemplatesTable = ({
           <AlertDescription className="mt-2">
             <Trans>
               You have reached your document limit.{' '}
-              <Link className="underline underline-offset-4" to="/settings/billing">
+              <Link className="underline underline-offset-4" to={`/o/${organisation.url}/settings/billing`}>
                 Upgrade your account to continue!
               </Link>
             </Trans>
@@ -223,6 +268,10 @@ export const TemplatesTable = ({
         currentPage={results.currentPage}
         totalPages={results.totalPages}
         onPaginationChange={onPaginationChange}
+        enableRowSelection={enableSelection}
+        rowSelection={rowSelection}
+        onRowSelectionChange={onRowSelectionChange}
+        getRowId={(row) => row.envelopeId}
         error={{
           enable: isLoadingError || false,
         }}
@@ -231,6 +280,11 @@ export const TemplatesTable = ({
           rows: 5,
           component: (
             <>
+              {enableSelection && (
+                <TableCell className="w-10">
+                  <Skeleton className="h-4 w-4 rounded" />
+                </TableCell>
+              )}
               <TableCell>
                 <Skeleton className="h-4 w-40 rounded-full" />
               </TableCell>

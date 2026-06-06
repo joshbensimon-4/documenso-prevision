@@ -1,16 +1,4 @@
-import { DocumentSigningOrder, FieldType, RecipientRole } from '@prisma/client';
-import { z } from 'zod';
-
 import { ZDocumentEmailSettingsSchema } from '@documenso/lib/types/document-email';
-import {
-  ZFieldHeightSchema,
-  ZFieldPageNumberSchema,
-  ZFieldPageXSchema,
-  ZFieldPageYSchema,
-  ZFieldWidthSchema,
-} from '@documenso/lib/types/field';
-import { ZFieldMetaSchema } from '@documenso/lib/types/field-meta';
-
 import {
   ZDocumentMetaDateFormatSchema,
   ZDocumentMetaDistributionMethodSchema,
@@ -22,29 +10,43 @@ import {
   ZDocumentMetaTimezoneSchema,
   ZDocumentMetaTypedSignatureEnabledSchema,
   ZDocumentMetaUploadSignatureEnabledSchema,
-  ZDocumentTitleSchema,
-} from '../document-router/schema';
+} from '@documenso/lib/types/document-meta';
+import {
+  ZFieldHeightSchema,
+  ZFieldPageNumberSchema,
+  ZFieldPageXSchema,
+  ZFieldPageYSchema,
+  ZFieldWidthSchema,
+} from '@documenso/lib/types/field';
+import { ZFieldAndMetaSchema } from '@documenso/lib/types/field-meta';
+import { ZRecipientEmailSchema } from '@documenso/lib/types/recipient';
+import { DocumentSigningOrder, RecipientRole } from '@prisma/client';
+import { z } from 'zod';
 
-const ZFieldSchema = z.object({
-  type: z.nativeEnum(FieldType),
-  pageNumber: ZFieldPageNumberSchema,
-  pageX: ZFieldPageXSchema,
-  pageY: ZFieldPageYSchema,
-  width: ZFieldWidthSchema,
-  height: ZFieldHeightSchema,
-  fieldMeta: ZFieldMetaSchema.optional(),
-});
+import { ZDocumentTitleSchema } from '../document-router/schema';
 
 export const ZCreateEmbeddingTemplateRequestSchema = z.object({
   title: ZDocumentTitleSchema,
   documentDataId: z.string(),
   recipients: z.array(
     z.object({
-      email: z.string().email(),
-      name: z.string().optional(),
-      role: z.nativeEnum(RecipientRole).optional(),
+      email: ZRecipientEmailSchema,
+      name: z.string(),
+      role: z.nativeEnum(RecipientRole),
       signingOrder: z.number().optional(),
-      fields: z.array(ZFieldSchema).optional(),
+      // We have an any cast so any changes here you need to update it in the embeding document edit page
+      // Search: "map<any>" to find it
+      fields: ZFieldAndMetaSchema.and(
+        z.object({
+          pageNumber: ZFieldPageNumberSchema,
+          pageX: ZFieldPageXSchema,
+          pageY: ZFieldPageYSchema,
+          width: ZFieldWidthSchema,
+          height: ZFieldHeightSchema,
+        }),
+      )
+        .array()
+        .optional(),
     }),
   ),
   meta: z
@@ -69,6 +71,4 @@ export const ZCreateEmbeddingTemplateResponseSchema = z.object({
   templateId: z.number(),
 });
 
-export type TCreateEmbeddingTemplateRequestSchema = z.infer<
-  typeof ZCreateEmbeddingTemplateRequestSchema
->;
+export type TCreateEmbeddingTemplateRequestSchema = z.infer<typeof ZCreateEmbeddingTemplateRequestSchema>;

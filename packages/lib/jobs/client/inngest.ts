@@ -1,8 +1,7 @@
 import type { Context as HonoContext } from 'hono';
-import type { Context, Handler, InngestFunction } from 'inngest';
+import type { Context, Handler, InngestFunction, Logger } from 'inngest';
 import { Inngest as InngestClient } from 'inngest';
 import { serve as createHonoPagesRoute } from 'inngest/hono';
-import type { Logger } from 'inngest/middleware/logger';
 
 import { env } from '../../utils/env';
 import type { JobDefinition, JobRunIO, SimpleTriggerJobOptions } from './_internal/job';
@@ -12,8 +11,7 @@ export class InngestJobProvider extends BaseJobProvider {
   private static _instance: InngestJobProvider;
 
   private _client: InngestClient;
-  private _functions: Array<InngestFunction<InngestFunction.Options, Handler.Any, Handler.Any>> =
-    [];
+  private _functions: Array<InngestFunction<InngestFunction.Options, Handler.Any, Handler.Any>> = [];
 
   private constructor(options: { client: InngestClient }) {
     super();
@@ -22,28 +20,31 @@ export class InngestJobProvider extends BaseJobProvider {
   }
 
   static getInstance() {
-    if (!this._instance) {
+    if (!InngestJobProvider._instance) {
       const client = new InngestClient({
         id: env('NEXT_PRIVATE_INNGEST_APP_ID') || 'documenso-app',
         eventKey: env('INNGEST_EVENT_KEY') || env('NEXT_PRIVATE_INNGEST_EVENT_KEY'),
+        logger: console,
       });
 
-      this._instance = new InngestJobProvider({ client });
+      InngestJobProvider._instance = new InngestJobProvider({ client });
     }
 
-    return this._instance;
+    return InngestJobProvider._instance;
   }
 
   public defineJob<N extends string, T>(job: JobDefinition<N, T>): void {
-    console.log('defining job', job.id);
+    const triggerConfig: { cron: string } | { event: N } = job.trigger.cron
+      ? { cron: job.trigger.cron }
+      : { event: job.trigger.name };
+
     const fn = this._client.createFunction(
       {
         id: job.id,
         name: job.name,
+        optimizeParallelism: job.optimizeParallelism ?? false,
       },
-      {
-        event: job.trigger.name,
-      },
+      triggerConfig,
       async (ctx) => {
         const io = this.convertInngestIoToJobRunIo(ctx);
 
@@ -88,7 +89,10 @@ export class InngestJobProvider extends BaseJobProvider {
     return {
       wait: step.sleep,
       logger: {
-        ...ctx.logger,
+        info: ctx.logger.info,
+        debug: ctx.logger.debug,
+        error: ctx.logger.error,
+        warn: ctx.logger.warn,
         log: ctx.logger.info,
       },
       runTask: async (cacheKey, callback) => {

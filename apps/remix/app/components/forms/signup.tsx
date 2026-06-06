@@ -1,60 +1,40 @@
-import { useEffect, useState } from 'react';
-
+import communityCardsImage from '@documenso/assets/images/community-cards.png';
+import { authClient } from '@documenso/auth/client';
+import { useAnalytics } from '@documenso/lib/client-only/hooks/use-analytics';
+import { ZNameSchema } from '@documenso/lib/constants/auth';
+import { AppError, AppErrorCode } from '@documenso/lib/errors/app-error';
+import { env } from '@documenso/lib/utils/env';
+import { zEmail } from '@documenso/lib/utils/zod';
+import { ZPasswordSchema } from '@documenso/trpc/server/auth-router/schema';
+import { cn } from '@documenso/ui/lib/utils';
+import { Button } from '@documenso/ui/primitives/button';
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@documenso/ui/primitives/form/form';
+import { Input } from '@documenso/ui/primitives/input';
+import { PasswordInput } from '@documenso/ui/primitives/password-input';
+import { SignaturePadDialog } from '@documenso/ui/primitives/signature-pad/signature-pad-dialog';
+import { useToast } from '@documenso/ui/primitives/use-toast';
 import { zodResolver } from '@hookform/resolvers/zod';
 import type { MessageDescriptor } from '@lingui/core';
 import { msg } from '@lingui/core/macro';
 import { useLingui } from '@lingui/react';
 import { Trans } from '@lingui/react/macro';
-import { AnimatePresence, motion } from 'framer-motion';
+import type { TurnstileInstance } from '@marsidev/react-turnstile';
+import { Turnstile } from '@marsidev/react-turnstile';
+import { useEffect, useRef } from 'react';
 import { useForm } from 'react-hook-form';
 import { FaIdCardClip } from 'react-icons/fa6';
 import { FcGoogle } from 'react-icons/fc';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { z } from 'zod';
 
-import communityCardsImage from '@documenso/assets/images/community-cards.png';
-import { authClient } from '@documenso/auth/client';
-import { useAnalytics } from '@documenso/lib/client-only/hooks/use-analytics';
-import { NEXT_PUBLIC_WEBAPP_URL } from '@documenso/lib/constants/app';
-import { AppError, AppErrorCode } from '@documenso/lib/errors/app-error';
-import { ZPasswordSchema } from '@documenso/trpc/server/auth-router/schema';
-import { cn } from '@documenso/ui/lib/utils';
-import { Button } from '@documenso/ui/primitives/button';
-import {
-  Form,
-  FormControl,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from '@documenso/ui/primitives/form/form';
-import { Input } from '@documenso/ui/primitives/input';
-import { PasswordInput } from '@documenso/ui/primitives/password-input';
-import { SignaturePadDialog } from '@documenso/ui/primitives/signature-pad/signature-pad-dialog';
-import { useToast } from '@documenso/ui/primitives/use-toast';
-
-import { UserProfileSkeleton } from '~/components/general/user-profile-skeleton';
 import { UserProfileTimur } from '~/components/general/user-profile-timur';
-
-type SignUpStep = 'BASIC_DETAILS' | 'CLAIM_USERNAME';
 
 export const ZSignUpFormSchema = z
   .object({
-    name: z
-      .string()
-      .trim()
-      .min(1, { message: msg`Please enter a valid name.`.id }),
-    email: z.string().email().min(1),
+    name: ZNameSchema,
+    email: zEmail().min(1),
     password: ZPasswordSchema,
     signature: z.string().min(1, { message: msg`We need your signature to sign documents`.id }),
-    url: z
-      .string()
-      .trim()
-      .toLowerCase()
-      .min(1, { message: msg`We need a username to create your profile`.id })
-      .regex(/^[a-z0-9-]+$/, {
-        message: msg`Username can only container alphanumeric characters and dashes.`.id,
-      }),
   })
   .refine(
     (data) => {
@@ -67,12 +47,11 @@ export const ZSignUpFormSchema = z
     },
   );
 
-export const signupErrorMessages: Record<string, MessageDescriptor> = {
-  SIGNUP_DISABLED: msg`Signups are disabled.`,
-  [AppErrorCode.ALREADY_EXISTS]: msg`User with this email already exists. Please use a different email address.`,
+export const SIGNUP_ERROR_MESSAGES: Record<string, MessageDescriptor> = {
+  SIGNUP_DISABLED: msg`Signup is currently disabled or not available for your email domain.`,
+  SIGNUP_DISPOSABLE_EMAIL: msg`Disposable email addresses are not allowed. Please sign up with a permanent email address.`,
+  [AppErrorCode.ALREADY_EXISTS]: msg`We were unable to create your account. If you already have an account, try signing in instead.`,
   [AppErrorCode.INVALID_REQUEST]: msg`We were unable to create your account. Please review the information you provided and try again.`,
-  PROFILE_URL_TAKEN: msg`This username has already been taken`,
-  PREMIUM_PROFILE_URL: msg`Only subscribers can have a username shorter than 6 characters`,
 };
 
 export type TSignUpFormSchema = z.infer<typeof ZSignUpFormSchema>;
@@ -80,15 +59,21 @@ export type TSignUpFormSchema = z.infer<typeof ZSignUpFormSchema>;
 export type SignUpFormProps = {
   className?: string;
   initialEmail?: string;
-  isGoogleSSOEnabled?: boolean;
-  isOIDCSSOEnabled?: boolean;
+  isEmailPasswordSignupEnabled?: boolean;
+  isGoogleSignupEnabled?: boolean;
+  isMicrosoftSignupEnabled?: boolean;
+  isOidcSignupEnabled?: boolean;
+  returnTo?: string;
 };
 
 export const SignUpForm = ({
   className,
   initialEmail,
-  isGoogleSSOEnabled,
-  isOIDCSSOEnabled,
+  isEmailPasswordSignupEnabled = true,
+  isGoogleSignupEnabled,
+  isMicrosoftSignupEnabled,
+  isOidcSignupEnabled,
+  returnTo,
 }: SignUpFormProps) => {
   const { _ } = useLingui();
   const { toast } = useToast();
@@ -97,11 +82,12 @@ export const SignUpForm = ({
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
-  const [step, setStep] = useState<SignUpStep>('BASIC_DETAILS');
-
   const utmSrc = searchParams.get('utm_source') ?? null;
 
-  const baseUrl = new URL(NEXT_PUBLIC_WEBAPP_URL() ?? 'http://localhost:3000');
+  const turnstileSiteKey = env('NEXT_PUBLIC_TURNSTILE_SITE_KEY');
+  const turnstileRef = useRef<TurnstileInstance>(null);
+
+  const hasSocialAuthEnabled = isGoogleSignupEnabled || isMicrosoftSignupEnabled || isOidcSignupEnabled;
 
   const form = useForm<TSignUpFormSchema>({
     values: {
@@ -109,7 +95,6 @@ export const SignUpForm = ({
       email: initialEmail ?? '',
       password: '',
       signature: '',
-      url: '',
     },
     mode: 'onBlur',
     resolver: zodResolver(ZSignUpFormSchema),
@@ -117,20 +102,33 @@ export const SignUpForm = ({
 
   const isSubmitting = form.formState.isSubmitting;
 
-  const name = form.watch('name');
-  const url = form.watch('url');
-
-  const onFormSubmit = async ({ name, email, password, signature, url }: TSignUpFormSchema) => {
+  const onFormSubmit = async ({ name, email, password, signature }: TSignUpFormSchema) => {
     try {
+      let token: string | undefined;
+
+      if (turnstileSiteKey) {
+        token = await turnstileRef.current?.getResponsePromise(3000).catch((_err) => undefined);
+
+        if (!token) {
+          toast({
+            title: _(msg`Human verification required`),
+            description: _(msg`Please complete the CAPTCHA challenge before signing in.`),
+            variant: 'destructive',
+          });
+
+          return;
+        }
+      }
+
       await authClient.emailPassword.signUp({
         name,
         email,
         password,
         signature,
-        url,
+        captchaToken: token ?? undefined,
       });
 
-      await navigate(`/unverified-account`);
+      await navigate(returnTo ? returnTo : '/unverified-account');
 
       toast({
         title: _(msg`Registration Successful`),
@@ -148,40 +146,37 @@ export const SignUpForm = ({
     } catch (err) {
       const error = AppError.parseError(err);
 
-      const errorMessage = signupErrorMessages[error.code] ?? signupErrorMessages.INVALID_REQUEST;
+      const errorMessage = SIGNUP_ERROR_MESSAGES[error.code] ?? SIGNUP_ERROR_MESSAGES.INVALID_REQUEST;
 
-      if (error.code === 'PROFILE_URL_TAKEN' || error.code === 'PREMIUM_PROFILE_URL') {
-        form.setError('url', {
-          type: 'manual',
-          message: _(errorMessage),
-        });
-      } else {
-        toast({
-          title: _(msg`An error occurred`),
-          description: _(errorMessage),
-          variant: 'destructive',
-        });
-      }
-    }
-  };
+      toast({
+        title: _(msg`An error occurred`),
+        description: _(errorMessage),
+        variant: 'destructive',
+      });
 
-  const onNextClick = async () => {
-    const valid = await form.trigger(['name', 'email', 'password', 'signature']);
-
-    if (valid) {
-      setStep('CLAIM_USERNAME');
+      turnstileRef.current?.reset();
     }
   };
 
   const onSignUpWithGoogleClick = async () => {
     try {
       await authClient.google.signIn();
-    } catch (err) {
+    } catch {
       toast({
         title: _(msg`An unknown error occurred`),
-        description: _(
-          msg`We encountered an unknown error while attempting to sign you Up. Please try again later.`,
-        ),
+        description: _(msg`We encountered an unknown error while attempting to sign you Up. Please try again later.`),
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const onSignUpWithMicrosoftClick = async () => {
+    try {
+      await authClient.microsoft.signIn();
+    } catch {
+      toast({
+        title: _(msg`An unknown error occurred`),
+        description: _(msg`We encountered an unknown error while attempting to sign you Up. Please try again later.`),
         variant: 'destructive',
       });
     }
@@ -190,12 +185,10 @@ export const SignUpForm = ({
   const onSignUpWithOIDCClick = async () => {
     try {
       await authClient.oidc.signIn();
-    } catch (err) {
+    } catch {
       toast({
         title: _(msg`An unknown error occurred`),
-        description: _(
-          msg`We encountered an unknown error while attempting to sign you Up. Please try again later.`,
-        ),
+        description: _(msg`We encountered an unknown error while attempting to sign you Up. Please try again later.`),
         variant: 'destructive',
       });
     }
@@ -215,7 +208,7 @@ export const SignUpForm = ({
 
   return (
     <div className={cn('flex justify-center gap-x-12', className)}>
-      <div className="border-border relative hidden flex-1 overflow-hidden rounded-xl border xl:flex">
+      <div className="relative hidden flex-1 overflow-hidden rounded-xl border border-border xl:flex">
         <div className="absolute -inset-8 -z-[2] backdrop-blur">
           <img
             src={communityCardsImage}
@@ -224,313 +217,196 @@ export const SignUpForm = ({
           />
         </div>
 
-        <div className="bg-background/50 absolute -inset-8 -z-[1] backdrop-blur-[2px]" />
+        <div className="absolute -inset-8 -z-[1] bg-background/50 backdrop-blur-[2px]" />
 
         <div className="relative flex h-full w-full flex-col items-center justify-evenly">
-          <div className="bg-background rounded-2xl border px-4 py-1 text-sm font-medium">
+          <div className="rounded-2xl border bg-background px-4 py-1 font-medium text-sm">
             <Trans>User profiles are here!</Trans>
           </div>
 
-          <AnimatePresence>
-            {step === 'BASIC_DETAILS' ? (
-              <motion.div className="w-full max-w-md" layoutId="user-profile">
-                <UserProfileTimur
-                  rows={2}
-                  className="bg-background border-border rounded-2xl border shadow-md"
-                />
-              </motion.div>
-            ) : (
-              <motion.div className="w-full max-w-md" layoutId="user-profile">
-                <UserProfileSkeleton
-                  user={{ name, url }}
-                  rows={2}
-                  className="bg-background border-border rounded-2xl border shadow-md"
-                />
-              </motion.div>
-            )}
-          </AnimatePresence>
+          <div className="w-full max-w-md">
+            <UserProfileTimur rows={2} className="rounded-2xl border border-border bg-background shadow-md" />
+          </div>
 
           <div />
         </div>
       </div>
 
-      <div className="border-border dark:bg-background relative z-10 flex min-h-[min(850px,80vh)] w-full max-w-lg flex-col rounded-xl border bg-neutral-100 p-6">
-        {step === 'BASIC_DETAILS' && (
-          <div className="h-20">
-            <h1 className="text-xl font-semibold md:text-2xl">
-              <Trans>Create a new account</Trans>
-            </h1>
+      <div className="relative z-10 flex min-h-[min(850px,80vh)] w-full max-w-lg flex-col rounded-xl border border-border bg-neutral-100 p-6 dark:bg-background">
+        <div className="h-20">
+          <h1 className="font-semibold text-xl md:text-2xl">
+            <Trans>Create a new account</Trans>
+          </h1>
 
-            <p className="text-muted-foreground mt-2 text-xs md:text-sm">
-              <Trans>
-                Create your account and start using state-of-the-art document signing. Open and
-                beautiful signing is within your grasp.
-              </Trans>
-            </p>
-          </div>
-        )}
-
-        {step === 'CLAIM_USERNAME' && (
-          <div className="h-20">
-            <h1 className="text-xl font-semibold md:text-2xl">
-              <Trans>Claim your username now</Trans>
-            </h1>
-
-            <p className="text-muted-foreground mt-2 text-xs md:text-sm">
-              <Trans>
-                You will get notified & be able to set up your documenso public profile when we
-                launch the feature.
-              </Trans>
-            </p>
-          </div>
-        )}
+          <p className="mt-2 text-muted-foreground text-xs md:text-sm">
+            <Trans>
+              Create your account and start using state-of-the-art document signing. Open and beautiful signing is
+              within your grasp.
+            </Trans>
+          </p>
+        </div>
 
         <hr className="-mx-6 my-4" />
 
         <Form {...form}>
-          <form
-            className="flex w-full flex-1 flex-col gap-y-4"
-            onSubmit={form.handleSubmit(onFormSubmit)}
-          >
-            {step === 'BASIC_DETAILS' && (
-              <fieldset
-                className={cn(
-                  'flex h-[550px] w-full flex-col gap-y-4',
-                  (isGoogleSSOEnabled || isOIDCSSOEnabled) && 'h-[650px]',
-                )}
-                disabled={isSubmitting}
-              >
-                <FormField
-                  control={form.control}
-                  name="name"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>
-                        <Trans>Full Name</Trans>
-                      </FormLabel>
-                      <FormControl>
-                        <Input type="text" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+          <form className="flex w-full flex-1 flex-col gap-y-4" onSubmit={form.handleSubmit(onFormSubmit)}>
+            <fieldset className="flex w-full flex-col gap-y-4" disabled={isSubmitting}>
+              {isEmailPasswordSignupEnabled && (
+                <>
+                  <FormField
+                    control={form.control}
+                    name="name"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>
+                          <Trans>Full Name</Trans>
+                        </FormLabel>
+                        <FormControl>
+                          <Input type="text" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
 
-                <FormField
-                  control={form.control}
-                  name="email"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>
-                        <Trans>Email Address</Trans>
-                      </FormLabel>
-                      <FormControl>
-                        <Input type="email" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+                  <FormField
+                    control={form.control}
+                    name="email"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>
+                          <Trans>Email Address</Trans>
+                        </FormLabel>
+                        <FormControl>
+                          <Input type="email" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
 
-                <FormField
-                  control={form.control}
-                  name="password"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>
-                        <Trans>Password</Trans>
-                      </FormLabel>
+                  <FormField
+                    control={form.control}
+                    name="password"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>
+                          <Trans>Password</Trans>
+                        </FormLabel>
 
-                      <FormControl>
-                        <PasswordInput {...field} />
-                      </FormControl>
+                        <FormControl>
+                          <PasswordInput {...field} />
+                        </FormControl>
 
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
 
-                <FormField
-                  control={form.control}
-                  name="signature"
-                  render={({ field: { onChange, value } }) => (
-                    <FormItem>
-                      <FormLabel>
-                        <Trans>Sign Here</Trans>
-                      </FormLabel>
-                      <FormControl>
-                        <SignaturePadDialog
-                          disabled={isSubmitting}
-                          value={value}
-                          onChange={(v) => onChange(v ?? '')}
-                        />
-                      </FormControl>
+                  <FormField
+                    control={form.control}
+                    name="signature"
+                    render={({ field: { onChange, value } }) => (
+                      <FormItem>
+                        <FormLabel>
+                          <Trans>Sign Here</Trans>
+                        </FormLabel>
+                        <FormControl>
+                          <SignaturePadDialog
+                            disabled={isSubmitting}
+                            value={value}
+                            onChange={(v) => onChange(v ?? '')}
+                          />
+                        </FormControl>
 
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-
-                {(isGoogleSSOEnabled || isOIDCSSOEnabled) && (
-                  <>
-                    <div className="relative flex items-center justify-center gap-x-4 py-2 text-xs uppercase">
-                      <div className="bg-border h-px flex-1" />
-                      <span className="text-muted-foreground bg-transparent">
-                        <Trans>Or</Trans>
-                      </span>
-                      <div className="bg-border h-px flex-1" />
-                    </div>
-                  </>
-                )}
-
-                {isGoogleSSOEnabled && (
-                  <>
-                    <Button
-                      type="button"
-                      size="lg"
-                      variant={'outline'}
-                      className="bg-background text-muted-foreground border"
-                      disabled={isSubmitting}
-                      onClick={onSignUpWithGoogleClick}
-                    >
-                      <FcGoogle className="mr-2 h-5 w-5" />
-                      <Trans>Sign Up with Google</Trans>
-                    </Button>
-                  </>
-                )}
-
-                {isOIDCSSOEnabled && (
-                  <>
-                    <Button
-                      type="button"
-                      size="lg"
-                      variant={'outline'}
-                      className="bg-background text-muted-foreground border"
-                      disabled={isSubmitting}
-                      onClick={onSignUpWithOIDCClick}
-                    >
-                      <FaIdCardClip className="mr-2 h-5 w-5" />
-                      <Trans>Sign Up with OIDC</Trans>
-                    </Button>
-                  </>
-                )}
-
-                <p className="text-muted-foreground mt-4 text-sm">
-                  <Trans>
-                    Already have an account?{' '}
-                    <Link to="/signin" className="text-documenso-700 duration-200 hover:opacity-70">
-                      Sign in instead
-                    </Link>
-                  </Trans>
-                </p>
-              </fieldset>
-            )}
-
-            {step === 'CLAIM_USERNAME' && (
-              <fieldset
-                className={cn(
-                  'flex h-[550px] w-full flex-col gap-y-4',
-                  isGoogleSSOEnabled && 'h-[650px]',
-                )}
-                disabled={isSubmitting}
-              >
-                <FormField
-                  control={form.control}
-                  name="url"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>
-                        <Trans>Public profile username</Trans>
-                      </FormLabel>
-
-                      <FormControl>
-                        <Input type="text" className="mb-2 mt-2 lowercase" {...field} />
-                      </FormControl>
-
-                      <FormMessage />
-
-                      <div className="bg-muted/50 border-border text-muted-foreground mt-2 inline-block max-w-[16rem] truncate rounded-md border px-2 py-1 text-sm lowercase">
-                        {baseUrl.host}/u/{field.value || '<username>'}
-                      </div>
-                    </FormItem>
-                  )}
-                />
-              </fieldset>
-            )}
-
-            <div className="mt-6">
-              {step === 'BASIC_DETAILS' && (
-                <p className="text-muted-foreground text-sm">
-                  <span className="font-medium">
-                    <Trans>Basic details</Trans>
-                  </span>{' '}
-                  1/2
-                </p>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </>
               )}
 
-              {step === 'CLAIM_USERNAME' && (
-                <p className="text-muted-foreground text-sm">
-                  <span className="font-medium">
-                    <Trans>Claim username</Trans>
-                  </span>{' '}
-                  2/2
-                </p>
-              )}
-
-              <div className="bg-foreground/40 relative mt-4 h-1.5 rounded-full">
-                <motion.div
-                  layout="size"
-                  layoutId="document-flow-container-step"
-                  className="bg-documenso absolute inset-y-0 left-0 rounded-full"
-                  style={{
-                    width: step === 'BASIC_DETAILS' ? '50%' : '100%',
+              {turnstileSiteKey && (
+                <Turnstile
+                  ref={turnstileRef}
+                  siteKey={turnstileSiteKey}
+                  options={{
+                    size: 'flexible',
+                    appearance: 'always',
                   }}
                 />
-              </div>
-            </div>
+              )}
 
-            <div className="flex items-center gap-x-4">
-              {/* Go back button, disabled if step is basic details */}
-              <Button
-                type="button"
-                size="lg"
-                variant="secondary"
-                className="flex-1"
-                disabled={step === 'BASIC_DETAILS' || form.formState.isSubmitting}
-                onClick={() => setStep('BASIC_DETAILS')}
-              >
-                <Trans>Back</Trans>
-              </Button>
+              {hasSocialAuthEnabled && (
+                <div className="relative flex items-center justify-center gap-x-4 py-2 text-xs uppercase">
+                  <div className="h-px flex-1 bg-border" />
+                  <span className="bg-transparent text-muted-foreground">
+                    <Trans>Or</Trans>
+                  </span>
+                  <div className="h-px flex-1 bg-border" />
+                </div>
+              )}
 
-              {/* Continue button */}
-              {step === 'BASIC_DETAILS' && (
+              {isGoogleSignupEnabled && (
                 <Button
                   type="button"
                   size="lg"
-                  className="flex-1 disabled:cursor-not-allowed"
-                  loading={form.formState.isSubmitting}
-                  onClick={onNextClick}
+                  variant={'outline'}
+                  className="border bg-background text-muted-foreground"
+                  disabled={isSubmitting}
+                  onClick={onSignUpWithGoogleClick}
                 >
-                  <Trans>Next</Trans>
+                  <FcGoogle className="mr-2 h-5 w-5" />
+                  <Trans>Sign Up with Google</Trans>
                 </Button>
               )}
 
-              {/* Sign up button */}
-              {step === 'CLAIM_USERNAME' && (
+              {isMicrosoftSignupEnabled && (
                 <Button
-                  loading={form.formState.isSubmitting}
-                  disabled={!form.formState.isValid}
-                  type="submit"
+                  type="button"
                   size="lg"
-                  className="flex-1"
+                  variant={'outline'}
+                  className="border bg-background text-muted-foreground"
+                  disabled={isSubmitting}
+                  onClick={onSignUpWithMicrosoftClick}
                 >
-                  <Trans>Complete</Trans>
+                  <img className="mr-2 h-4 w-4" alt="Microsoft Logo" src={'/static/microsoft.svg'} />
+                  <Trans>Sign Up with Microsoft</Trans>
                 </Button>
               )}
-            </div>
+
+              {isOidcSignupEnabled && (
+                <Button
+                  type="button"
+                  size="lg"
+                  variant={'outline'}
+                  className="border bg-background text-muted-foreground"
+                  disabled={isSubmitting}
+                  onClick={onSignUpWithOIDCClick}
+                >
+                  <FaIdCardClip className="mr-2 h-5 w-5" />
+                  <Trans>Sign Up with OIDC</Trans>
+                </Button>
+              )}
+
+              <p className="mt-4 text-muted-foreground text-sm">
+                <Trans>
+                  Already have an account?{' '}
+                  <Link to="/signin" className="text-documenso-700 duration-200 hover:opacity-70">
+                    Sign in instead
+                  </Link>
+                </Trans>
+              </p>
+            </fieldset>
+
+            {isEmailPasswordSignupEnabled && (
+              <Button loading={form.formState.isSubmitting} type="submit" size="lg" className="mt-6 w-full">
+                <Trans>Create account</Trans>
+              </Button>
+            )}
           </form>
         </Form>
-        <p className="text-muted-foreground mt-6 text-xs">
+        <p className="mt-6 text-muted-foreground text-xs">
           <Trans>
             By proceeding, you agree to our{' '}
             <Link

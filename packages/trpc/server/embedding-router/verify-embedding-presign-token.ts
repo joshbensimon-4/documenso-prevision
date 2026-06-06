@@ -3,9 +3,9 @@ import { verifyEmbeddingPresignToken } from '@documenso/lib/server-only/embeddin
 
 import { procedure } from '../trpc';
 import {
+  verifyEmbeddingPresignTokenMeta,
   ZVerifyEmbeddingPresignTokenRequestSchema,
   ZVerifyEmbeddingPresignTokenResponseSchema,
-  verifyEmbeddingPresignTokenMeta,
 } from './verify-embedding-presign-token.types';
 
 /**
@@ -17,10 +17,11 @@ export const verifyEmbeddingPresignTokenRoute = procedure
   .output(ZVerifyEmbeddingPresignTokenResponseSchema)
   .mutation(async ({ input }) => {
     try {
-      const { token } = input;
+      const { token, scope } = input;
 
       const apiToken = await verifyEmbeddingPresignToken({
         token,
+        scope,
       }).catch(() => null);
 
       return { success: !!apiToken };

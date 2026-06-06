@@ -6,7 +6,13 @@ export const FREE_PLAN_LIMITS: TLimitsSchema = {
   directTemplates: 3,
 };
 
-export const TEAM_PLAN_LIMITS: TLimitsSchema = {
+export const INACTIVE_PLAN_LIMITS: TLimitsSchema = {
+  documents: 0,
+  recipients: 0,
+  directTemplates: 0,
+};
+
+export const PAID_PLAN_LIMITS: TLimitsSchema = {
   documents: Infinity,
   recipients: Infinity,
   directTemplates: Infinity,
@@ -17,3 +23,15 @@ export const SELFHOSTED_PLAN_LIMITS: TLimitsSchema = {
   recipients: Infinity,
   directTemplates: Infinity,
 };
+
+/**
+ * Used as an initial value for the frontend before values are loaded from the server.
+ */
+export const DEFAULT_MINIMUM_ENVELOPE_ITEM_COUNT = 5;
+
+/**
+ * Used as an initial value for the frontend before values are loaded from the server.
+ *
+ * 0 = Unlimited recipients.
+ */
+export const DEFAULT_RECIPIENT_COUNT = 20;

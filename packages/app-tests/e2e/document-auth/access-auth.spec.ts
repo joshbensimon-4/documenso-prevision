@@ -1,25 +1,24 @@
-import { expect, test } from '@playwright/test';
-
 import { createDocumentAuthOptions } from '@documenso/lib/utils/document-auth';
 import { prisma } from '@documenso/prisma';
 import { seedPendingDocument } from '@documenso/prisma/seed/documents';
 import { seedUser } from '@documenso/prisma/seed/users';
+import { expect, test } from '@playwright/test';
 
 import { apiSignin } from '../fixtures/authentication';
 
 test('[DOCUMENT_AUTH]: should grant access when not required', async ({ page }) => {
-  const user = await seedUser();
+  const { user, team } = await seedUser();
 
-  const recipientWithAccount = await seedUser();
+  const { user: recipientWithAccount } = await seedUser();
 
-  const document = await seedPendingDocument(user, [
+  const document = await seedPendingDocument(user, team.id, [
     recipientWithAccount,
     'recipientwithoutaccount@documenso.com',
   ]);
 
   const recipients = await prisma.recipient.findMany({
     where: {
-      documentId: document.id,
+      envelopeId: document.id,
     },
   });
 
@@ -32,18 +31,19 @@ test('[DOCUMENT_AUTH]: should grant access when not required', async ({ page }) 
 });
 
 test('[DOCUMENT_AUTH]: should allow or deny access when required', async ({ page }) => {
-  const user = await seedUser();
+  const { user, team } = await seedUser();
 
-  const recipientWithAccount = await seedUser();
+  const { user: recipientWithAccount } = await seedUser();
 
   const document = await seedPendingDocument(
     user,
+    team.id,
     [recipientWithAccount, 'recipientwithoutaccount@documenso.com'],
     {
       createDocumentOptions: {
         authOptions: createDocumentAuthOptions({
-          globalAccessAuth: 'ACCOUNT',
-          globalActionAuth: null,
+          globalAccessAuth: ['ACCOUNT'],
+          globalActionAuth: [],
         }),
       },
     },
@@ -51,7 +51,7 @@ test('[DOCUMENT_AUTH]: should allow or deny access when required', async ({ page
 
   const recipients = await prisma.recipient.findMany({
     where: {
-      documentId: document.id,
+      envelopeId: document.id,
     },
   });
 

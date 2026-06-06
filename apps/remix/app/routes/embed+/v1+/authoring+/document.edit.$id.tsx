@@ -1,34 +1,29 @@
-import { useLayoutEffect, useMemo, useState } from 'react';
-
-import { msg } from '@lingui/core/macro';
-import { useLingui } from '@lingui/react';
-import { DocumentDistributionMethod, DocumentSigningOrder, SigningStatus } from '@prisma/client';
-import { redirect, useLoaderData } from 'react-router';
-
-import {
-  DEFAULT_DOCUMENT_DATE_FORMAT,
-  isValidDateFormat,
-} from '@documenso/lib/constants/date-formats';
+import { DEFAULT_DOCUMENT_DATE_FORMAT, isValidDateFormat } from '@documenso/lib/constants/date-formats';
 import { DocumentSignatureType } from '@documenso/lib/constants/document';
 import { isValidLanguageCode } from '@documenso/lib/constants/i18n';
 import { DEFAULT_DOCUMENT_TIME_ZONE } from '@documenso/lib/constants/time-zones';
 import { getDocumentWithDetailsById } from '@documenso/lib/server-only/document/get-document-with-details-by-id';
 import { verifyEmbeddingPresignToken } from '@documenso/lib/server-only/embedding-presign/verify-embedding-presign-token';
 import { ZDocumentEmailSettingsSchema } from '@documenso/lib/types/document-email';
+import {
+  type TBaseEmbedAuthoringSchema,
+  ZBaseEmbedAuthoringEditSchema,
+} from '@documenso/lib/types/embed-authoring-base-schema';
 import { nanoid } from '@documenso/lib/universal/id';
 import { trpc } from '@documenso/trpc/react';
 import { Stepper } from '@documenso/ui/primitives/stepper';
 import { useToast } from '@documenso/ui/primitives/use-toast';
+import { msg } from '@lingui/core/macro';
+import { useLingui } from '@lingui/react';
+import { DocumentDistributionMethod, DocumentSigningOrder, SigningStatus } from '@prisma/client';
+import { useLayoutEffect, useMemo, useState } from 'react';
+import { redirect, useLoaderData } from 'react-router';
 
 import { ConfigureDocumentProvider } from '~/components/embed/authoring/configure-document-context';
 import { ConfigureDocumentView } from '~/components/embed/authoring/configure-document-view';
 import type { TConfigureEmbedFormSchema } from '~/components/embed/authoring/configure-document-view.types';
 import { ConfigureFieldsView } from '~/components/embed/authoring/configure-fields-view';
 import type { TConfigureFieldsFormSchema } from '~/components/embed/authoring/configure-fields-view.types';
-import {
-  type TBaseEmbedAuthoringSchema,
-  ZBaseEmbedAuthoringSchema,
-} from '~/types/embed-authoring-base-schema';
 
 import type { Route } from './+types/document.edit.$id';
 
@@ -41,7 +36,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const token = url.searchParams.get('token') || '';
 
   // We also know that the token is valid, but we need the userId + teamId
-  const result = await verifyEmbeddingPresignToken({ token }).catch(() => null);
+  const result = await verifyEmbeddingPresignToken({ token, scope: `documentId:${id}` }).catch(() => null);
 
   if (!result) {
     throw new Error('Invalid token');
@@ -54,7 +49,10 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   }
 
   const document = await getDocumentWithDetailsById({
-    documentId,
+    id: {
+      type: 'documentId',
+      id: documentId,
+    },
     userId: result?.userId,
     teamId: result?.teamId ?? undefined,
   }).catch(() => null);
@@ -72,6 +70,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   }));
 
   return {
+    token,
     document: {
       ...document,
       fields,
@@ -83,7 +82,9 @@ export default function EmbeddingAuthoringDocumentEditPage() {
   const { _ } = useLingui();
   const { toast } = useToast();
 
-  const { document } = useLoaderData<typeof loader>();
+  const { document, token } = useLoaderData<typeof loader>();
+
+  const [hasFinishedInit, setHasFinishedInit] = useState(false);
 
   const signatureTypes = useMemo(() => {
     const types: string[] = [];
@@ -109,15 +110,12 @@ export default function EmbeddingAuthoringDocumentEditPage() {
     meta: {
       subject: document.documentMeta?.subject ?? undefined,
       message: document.documentMeta?.message ?? undefined,
-      distributionMethod:
-        document.documentMeta?.distributionMethod ?? DocumentDistributionMethod.EMAIL,
+      distributionMethod: document.documentMeta?.distributionMethod ?? DocumentDistributionMethod.EMAIL,
       emailSettings: document.documentMeta?.emailSettings ?? ZDocumentEmailSettingsSchema.parse({}),
       timezone: document.documentMeta?.timezone ?? DEFAULT_DOCUMENT_TIME_ZONE,
       signingOrder: document.documentMeta?.signingOrder ?? DocumentSigningOrder.PARALLEL,
       allowDictateNextSigner: document.documentMeta?.allowDictateNextSigner ?? false,
-      language: isValidLanguageCode(document.documentMeta?.language)
-        ? document.documentMeta.language
-        : undefined,
+      language: isValidLanguageCode(document.documentMeta?.language) ? document.documentMeta.language : undefined,
       signatureTypes: signatureTypes,
       dateFormat: isValidDateFormat(document.documentMeta?.dateFormat)
         ? document.documentMeta?.dateFormat
@@ -140,8 +138,7 @@ export default function EmbeddingAuthoringDocumentEditPage() {
       nativeId: field.id,
       formId: nanoid(8),
       type: field.type,
-      signerEmail:
-        document.recipients.find((recipient) => recipient.id === field.recipientId)?.email ?? '',
+      signerEmail: document.recipients.find((recipient) => recipient.id === field.recipientId)?.email ?? '',
       inserted: field.inserted,
       recipientId: field.recipientId,
       pageNumber: field.page,
@@ -156,9 +153,9 @@ export default function EmbeddingAuthoringDocumentEditPage() {
   const [features, setFeatures] = useState<TBaseEmbedAuthoringSchema['features'] | null>(null);
   const [externalId, setExternalId] = useState<string | null>(null);
   const [currentStep, setCurrentStep] = useState(1);
+  const [canGoBack, setCanGoBack] = useState(true);
 
-  const { mutateAsync: updateEmbeddingDocument } =
-    trpc.embeddingPresign.updateEmbeddingDocument.useMutation();
+  const { mutateAsync: updateEmbeddingDocument } = trpc.embeddingPresign.updateEmbeddingDocument.useMutation();
 
   const handleConfigurePageViewSubmit = (data: TConfigureEmbedFormSchema) => {
     // Store the configuration data and move to the field placement stage
@@ -174,6 +171,7 @@ export default function EmbeddingAuthoringDocumentEditPage() {
         fields: fieldData.fields.filter((field) => signerEmails.includes(field.signerEmail)),
       };
     });
+
     setCurrentStep(2);
   };
 
@@ -232,6 +230,7 @@ export default function EmbeddingAuthoringDocumentEditPage() {
             .map<any>((f) => ({
               ...f,
               id: f.nativeId,
+              envelopeItemId: document.documentData.envelopeItemId,
               pageX: f.pageX,
               pageY: f.pageY,
               width: f.pageWidth,
@@ -271,9 +270,7 @@ export default function EmbeddingAuthoringDocumentEditPage() {
     try {
       const hash = window.location.hash.slice(1);
 
-      const result = ZBaseEmbedAuthoringSchema.safeParse(
-        JSON.parse(decodeURIComponent(atob(hash))),
-      );
+      const result = ZBaseEmbedAuthoringEditSchema.safeParse(JSON.parse(decodeURIComponent(atob(hash))));
 
       if (!result.success) {
         return;
@@ -281,14 +278,25 @@ export default function EmbeddingAuthoringDocumentEditPage() {
 
       setFeatures(result.data.features);
 
+      if (result.data.onlyEditFields) {
+        setCurrentStep(2);
+        setCanGoBack(false);
+      }
+
       // Extract externalId from the parsed data if available
       if (result.data.externalId) {
         setExternalId(result.data.externalId);
       }
+
+      setHasFinishedInit(true);
     } catch (err) {
       console.error('Error parsing embedding params:', err);
     }
   }, []);
+
+  if (!hasFinishedInit) {
+    return null;
+  }
 
   return (
     <div className="relative mx-auto flex min-h-[100dvh] max-w-screen-lg p-6">
@@ -302,9 +310,10 @@ export default function EmbeddingAuthoringDocumentEditPage() {
 
           <ConfigureFieldsView
             configData={configuration!}
-            documentData={document.documentData}
+            presignToken={token}
+            envelopeItem={document.envelopeItems[0]}
             defaultValues={fields ?? undefined}
-            onBack={handleBackToConfig}
+            onBack={canGoBack ? handleBackToConfig : undefined}
             onSubmit={handleConfigureFieldsSubmit}
           />
         </Stepper>

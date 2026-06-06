@@ -4,21 +4,21 @@ import { DOCUMENT_AUDIT_LOG_TYPE, DOCUMENT_EMAIL_TYPE } from '../../types/docume
 import { parseDocumentAuditLogData } from '../../utils/document-audit-logs';
 
 export type GetDocumentCertificateAuditLogsOptions = {
-  id: number;
+  envelopeId: string;
 };
 
-export const getDocumentCertificateAuditLogs = async ({
-  id,
-}: GetDocumentCertificateAuditLogsOptions) => {
+export const getDocumentCertificateAuditLogs = async ({ envelopeId }: GetDocumentCertificateAuditLogsOptions) => {
   const rawAuditLogs = await prisma.documentAuditLog.findMany({
     where: {
-      documentId: id,
+      envelopeId,
       type: {
         in: [
           DOCUMENT_AUDIT_LOG_TYPE.DOCUMENT_RECIPIENT_COMPLETED,
           DOCUMENT_AUDIT_LOG_TYPE.DOCUMENT_RECIPIENT_REJECTED,
+          DOCUMENT_AUDIT_LOG_TYPE.DOCUMENT_FIELD_INSERTED,
           DOCUMENT_AUDIT_LOG_TYPE.DOCUMENT_OPENED,
           DOCUMENT_AUDIT_LOG_TYPE.EMAIL_SENT,
+          DOCUMENT_AUDIT_LOG_TYPE.DOCUMENT_SENT,
         ],
       },
     },
@@ -35,6 +35,12 @@ export const getDocumentCertificateAuditLogs = async ({
     ),
     [DOCUMENT_AUDIT_LOG_TYPE.DOCUMENT_OPENED]: auditLogs.filter(
       (log) => log.type === DOCUMENT_AUDIT_LOG_TYPE.DOCUMENT_OPENED,
+    ),
+    [DOCUMENT_AUDIT_LOG_TYPE.DOCUMENT_SENT]: auditLogs.filter(
+      (log) => log.type === DOCUMENT_AUDIT_LOG_TYPE.DOCUMENT_SENT,
+    ),
+    [DOCUMENT_AUDIT_LOG_TYPE.DOCUMENT_FIELD_INSERTED]: auditLogs.filter(
+      (log) => log.type === DOCUMENT_AUDIT_LOG_TYPE.DOCUMENT_FIELD_INSERTED,
     ),
     [DOCUMENT_AUDIT_LOG_TYPE.EMAIL_SENT]: auditLogs.filter(
       (log) =>

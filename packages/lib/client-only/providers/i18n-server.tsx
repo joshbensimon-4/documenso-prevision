@@ -1,11 +1,7 @@
 import type { I18n, Messages } from '@lingui/core';
 import { setupI18n } from '@lingui/core';
 
-import {
-  APP_I18N_OPTIONS,
-  SUPPORTED_LANGUAGE_CODES,
-  isValidLanguageCode,
-} from '../../constants/i18n';
+import { APP_I18N_OPTIONS, isValidLanguageCode, SUPPORTED_LANGUAGE_CODES } from '../../constants/i18n';
 import { env } from '../../utils/env';
 import { remember } from '../../utils/remember';
 
@@ -61,8 +57,8 @@ export const getI18nInstance = async (lang?: SupportedLanguages | (string & {}))
   const instances = await allI18nInstances;
 
   if (!isValidLanguageCode(lang)) {
-    return instances[APP_I18N_OPTIONS.sourceLang];
+    return instances[APP_I18N_OPTIONS.defaultLang];
   }
 
-  return instances[lang] ?? instances[APP_I18N_OPTIONS.sourceLang];
+  return instances[lang] ?? instances[APP_I18N_OPTIONS.defaultLang];
 };

@@ -1,64 +1,25 @@
+import { prisma } from '@documenso/prisma';
 import { TeamMemberRole } from '@prisma/client';
 import { match } from 'ts-pattern';
 
-import { prisma } from '@documenso/prisma';
-
 import { DocumentVisibility } from '../../types/document-visibility';
 import type { TFolderType } from '../../types/folder-type';
+import { getTeamById } from '../team/get-team';
 
 export interface GetFolderBreadcrumbsOptions {
   userId: number;
-  teamId?: number;
+  teamId: number;
   folderId: string;
   type?: TFolderType;
 }
 
-export const getFolderBreadcrumbs = async ({
-  userId,
-  teamId,
-  folderId,
-  type,
-}: GetFolderBreadcrumbsOptions) => {
-  let teamMemberRole = null;
+export const getFolderBreadcrumbs = async ({ userId, teamId, folderId, type }: GetFolderBreadcrumbsOptions) => {
+  const team = await getTeamById({ userId, teamId });
 
-  if (teamId !== undefined) {
-    try {
-      const team = await prisma.team.findFirstOrThrow({
-        where: {
-          id: teamId,
-          members: {
-            some: {
-              userId,
-            },
-          },
-        },
-        include: {
-          members: {
-            where: {
-              userId,
-            },
-            select: {
-              role: true,
-            },
-          },
-        },
-      });
-
-      teamMemberRole = team.members[0].role;
-    } catch (error) {
-      console.error('Error finding team:', error);
-      return [];
-    }
-  }
-
-  const visibilityFilters = match(teamMemberRole)
+  const visibilityFilters = match(team.currentTeamRole)
     .with(TeamMemberRole.ADMIN, () => ({
       visibility: {
-        in: [
-          DocumentVisibility.EVERYONE,
-          DocumentVisibility.MANAGER_AND_ABOVE,
-          DocumentVisibility.ADMIN,
-        ],
+        in: [DocumentVisibility.EVERYONE, DocumentVisibility.MANAGER_AND_ABOVE, DocumentVisibility.ADMIN],
       },
     }))
     .with(TeamMemberRole.MANAGER, () => ({
@@ -71,14 +32,10 @@ export const getFolderBreadcrumbs = async ({
   const whereClause = (folderId: string) => ({
     id: folderId,
     ...(type ? { type } : {}),
-    ...(teamId
-      ? {
-          OR: [
-            { teamId, ...visibilityFilters },
-            { userId, teamId },
-          ],
-        }
-      : { userId, teamId: null }),
+    OR: [
+      { teamId, ...visibilityFilters },
+      { userId, teamId },
+    ],
   });
 
   const breadcrumbs = [];

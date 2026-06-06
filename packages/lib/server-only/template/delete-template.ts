@@ -1,30 +1,40 @@
 import { prisma } from '@documenso/prisma';
+import { EnvelopeType, WebhookTriggerEvents } from '@prisma/client';
+
+import { mapEnvelopeToWebhookDocumentPayload, ZWebhookDocumentSchema } from '../../types/webhook-payload';
+import type { EnvelopeIdOptions } from '../../utils/envelope';
+import { getEnvelopeWhereInput } from '../envelope/get-envelope-by-id';
+import { triggerWebhook } from '../webhooks/trigger/trigger-webhook';
 
 export type DeleteTemplateOptions = {
-  id: number;
+  id: EnvelopeIdOptions;
   userId: number;
-  teamId?: number;
+  teamId: number;
 };
 
 export const deleteTemplate = async ({ id, userId, teamId }: DeleteTemplateOptions) => {
-  return await prisma.template.delete({
-    where: {
-      id,
-      ...(teamId
-        ? {
-            team: {
-              id: teamId,
-              members: {
-                some: {
-                  userId,
-                },
-              },
-            },
-          }
-        : {
-            userId,
-            teamId: null,
-          }),
-    },
+  const { envelopeWhereInput } = await getEnvelopeWhereInput({
+    id,
+    type: EnvelopeType.TEMPLATE,
+    userId,
+    teamId,
   });
+
+  const templateToDelete = await prisma.envelope.findUniqueOrThrow({
+    where: envelopeWhereInput,
+    include: { documentMeta: true, recipients: true },
+  });
+
+  const deletedTemplate = await prisma.envelope.delete({
+    where: envelopeWhereInput,
+  });
+
+  await triggerWebhook({
+    event: WebhookTriggerEvents.TEMPLATE_DELETED,
+    data: ZWebhookDocumentSchema.parse(mapEnvelopeToWebhookDocumentPayload(templateToDelete)),
+    userId,
+    teamId,
+  });
+
+  return deletedTemplate;
 };

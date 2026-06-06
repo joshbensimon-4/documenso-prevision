@@ -1,20 +1,11 @@
-import { msg } from '@lingui/core/macro';
-import { useLingui } from '@lingui/react';
-import { Trans } from '@lingui/react/macro';
-
 import { validateTextField } from '@documenso/lib/advanced-fields-validation/validate-text';
-import { type TTextFieldMeta as TextFieldMeta } from '@documenso/lib/types/field-meta';
+import type { TTextFieldMeta as TextFieldMeta } from '@documenso/lib/types/field-meta';
 import { Input } from '@documenso/ui/primitives/input';
 import { Label } from '@documenso/ui/primitives/label';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@documenso/ui/primitives/select';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@documenso/ui/primitives/select';
 import { Switch } from '@documenso/ui/primitives/switch';
 import { Textarea } from '@documenso/ui/primitives/textarea';
+import { Trans, useLingui } from '@lingui/react/macro';
 
 type TextFieldAdvancedSettingsProps = {
   fieldState: TextFieldMeta;
@@ -27,12 +18,11 @@ export const TextFieldAdvancedSettings = ({
   handleFieldChange,
   handleErrors,
 }: TextFieldAdvancedSettingsProps) => {
-  const { _ } = useLingui();
+  const { t } = useLingui();
 
   const handleInput = (field: keyof TextFieldMeta, value: string | boolean) => {
     const text = field === 'text' ? String(value) : (fieldState.text ?? '');
-    const limit =
-      field === 'characterLimit' ? Number(value) : Number(fieldState.characterLimit ?? 0);
+    const limit = field === 'characterLimit' ? Number(value) : Number(fieldState.characterLimit ?? 0);
     const fontSize = field === 'fontSize' ? Number(value) : Number(fieldState.fontSize ?? 14);
     const readOnly = field === 'readOnly' ? Boolean(value) : Boolean(fieldState.readOnly);
     const required = field === 'required' ? Boolean(value) : Boolean(fieldState.required);
@@ -57,8 +47,8 @@ export const TextFieldAdvancedSettings = ({
         </Label>
         <Input
           id="label"
-          className="bg-background mt-2"
-          placeholder={_(msg`Field label`)}
+          className="mt-2 bg-background"
+          placeholder={t`Field label`}
           value={fieldState.label}
           onChange={(e) => handleFieldChange('label', e.target.value)}
         />
@@ -69,8 +59,8 @@ export const TextFieldAdvancedSettings = ({
         </Label>
         <Input
           id="placeholder"
-          className="bg-background mt-2"
-          placeholder={_(msg`Field placeholder`)}
+          className="mt-2 bg-background"
+          placeholder={t`Field placeholder`}
           value={fieldState.placeholder}
           onChange={(e) => handleFieldChange('placeholder', e.target.value)}
         />
@@ -82,8 +72,8 @@ export const TextFieldAdvancedSettings = ({
         </Label>
         <Textarea
           id="text"
-          className="bg-background mt-2"
-          placeholder={_(msg`Add text to the field`)}
+          className="mt-2 bg-background"
+          placeholder={t`Add text to the field`}
           value={fieldState.text}
           onChange={(e) => handleInput('text', e.target.value)}
         />
@@ -97,8 +87,8 @@ export const TextFieldAdvancedSettings = ({
           id="characterLimit"
           type="number"
           min={0}
-          className="bg-background mt-2"
-          placeholder={_(msg`Field character limit`)}
+          className="mt-2 bg-background"
+          placeholder={t`Field character limit`}
           value={fieldState.characterLimit}
           onChange={(e) => handleInput('characterLimit', e.target.value)}
         />
@@ -111,8 +101,8 @@ export const TextFieldAdvancedSettings = ({
         <Input
           id="fontSize"
           type="number"
-          className="bg-background mt-2"
-          placeholder={_(msg`Field font size`)}
+          className="mt-2 bg-background"
+          placeholder={t`Field font size`}
           value={fieldState.fontSize}
           onChange={(e) => handleInput('fontSize', e.target.value)}
           min={8}
@@ -135,8 +125,8 @@ export const TextFieldAdvancedSettings = ({
             handleInput('textAlign', value);
           }}
         >
-          <SelectTrigger className="bg-background mt-2">
-            <SelectValue placeholder="Select text align" />
+          <SelectTrigger className="mt-2 bg-background">
+            <SelectValue placeholder={t`Select text align`} />
           </SelectTrigger>
 
           <SelectContent>

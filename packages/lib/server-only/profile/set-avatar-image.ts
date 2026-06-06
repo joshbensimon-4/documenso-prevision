@@ -1,52 +1,44 @@
-import sharp from 'sharp';
-
 import { prisma } from '@documenso/prisma';
 
-import { AppError, AppErrorCode } from '../../errors/app-error';
+import { ORGANISATION_MEMBER_ROLE_PERMISSIONS_MAP } from '../../constants/organisations';
+import { TEAM_MEMBER_ROLE_PERMISSIONS_MAP } from '../../constants/teams';
+import { AppError } from '../../errors/app-error';
 import type { ApiRequestMetadata } from '../../universal/extract-request-metadata';
+import { optimiseAvatar } from '../../utils/images/avatar';
+import { buildOrganisationWhereQuery } from '../../utils/organisations';
+import { buildTeamWhereQuery } from '../../utils/teams';
 
 export type SetAvatarImageOptions = {
   userId: number;
-  teamId?: number | null;
+  target:
+    | {
+        type: 'user';
+      }
+    | {
+        type: 'team';
+        teamId: number;
+      }
+    | {
+        type: 'organisation';
+        organisationId: string;
+      };
   bytes?: string | null;
   requestMetadata: ApiRequestMetadata;
 };
 
-export const setAvatarImage = async ({
-  userId,
-  teamId,
-  bytes,
-  requestMetadata,
-}: SetAvatarImageOptions) => {
+/**
+ * Pretty nasty but will do for now.
+ */
+export const setAvatarImage = async ({ userId, target, bytes, requestMetadata }: SetAvatarImageOptions) => {
   let oldAvatarImageId: string | null = null;
 
-  const user = await prisma.user.findUnique({
-    where: {
-      id: userId,
-    },
-    include: {
-      avatarImage: true,
-    },
-  });
-
-  if (!user) {
-    throw new AppError(AppErrorCode.NOT_FOUND, {
-      message: 'User not found',
-    });
-  }
-
-  oldAvatarImageId = user.avatarImageId;
-
-  if (teamId) {
+  if (target.type === 'team') {
     const team = await prisma.team.findFirst({
-      where: {
-        id: teamId,
-        members: {
-          some: {
-            userId,
-          },
-        },
-      },
+      where: buildTeamWhereQuery({
+        teamId: target.teamId,
+        userId,
+        roles: TEAM_MEMBER_ROLE_PERMISSIONS_MAP['MANAGE_TEAM'],
+      }),
     });
 
     if (!team) {
@@ -56,6 +48,39 @@ export const setAvatarImage = async ({
     }
 
     oldAvatarImageId = team.avatarImageId;
+  } else if (target.type === 'organisation') {
+    const organisation = await prisma.organisation.findFirst({
+      where: buildOrganisationWhereQuery({
+        organisationId: target.organisationId,
+        userId,
+        roles: ORGANISATION_MEMBER_ROLE_PERMISSIONS_MAP['MANAGE_ORGANISATION'],
+      }),
+    });
+
+    if (!organisation) {
+      throw new AppError('ORGANISATION_NOT_FOUND', {
+        statusCode: 404,
+      });
+    }
+
+    oldAvatarImageId = organisation.avatarImageId;
+  } else {
+    const user = await prisma.user.findUnique({
+      where: {
+        id: userId,
+      },
+      include: {
+        avatarImage: true,
+      },
+    });
+
+    if (!user) {
+      throw new AppError('USER_NOT_FOUND', {
+        statusCode: 404,
+      });
+    }
+
+    oldAvatarImageId = user.avatarImageId;
   }
 
   if (oldAvatarImageId) {
@@ -69,10 +94,7 @@ export const setAvatarImage = async ({
   let newAvatarImageId: string | null = null;
 
   if (bytes) {
-    const optimisedBytes = await sharp(Buffer.from(bytes, 'base64'))
-      .resize(512, 512)
-      .toFormat('jpeg', { quality: 75 })
-      .toBuffer();
+    const optimisedBytes = await optimiseAvatar(bytes);
 
     const avatarImage = await prisma.avatarImage.create({
       data: {
@@ -83,17 +105,26 @@ export const setAvatarImage = async ({
     newAvatarImageId = avatarImage.id;
   }
 
-  if (teamId) {
+  // TODO: Audit Logs
+
+  if (target.type === 'team') {
     await prisma.team.update({
       where: {
-        id: teamId,
+        id: target.teamId,
       },
       data: {
         avatarImageId: newAvatarImageId,
       },
     });
-
-    // TODO: Audit Logs
+  } else if (target.type === 'organisation') {
+    await prisma.organisation.update({
+      where: {
+        id: target.organisationId,
+      },
+      data: {
+        avatarImageId: newAvatarImageId,
+      },
+    });
   } else {
     await prisma.user.update({
       where: {
@@ -103,8 +134,6 @@ export const setAvatarImage = async ({
         avatarImageId: newAvatarImageId,
       },
     });
-
-    // TODO: Audit Logs
   }
 
   return newAvatarImageId;

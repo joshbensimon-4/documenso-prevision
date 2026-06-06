@@ -1,18 +1,9 @@
-import { msg } from '@lingui/core/macro';
-import { useLingui } from '@lingui/react';
-import { Trans } from '@lingui/react/macro';
-
 import { validateFields as validateEmailFields } from '@documenso/lib/advanced-fields-validation/validate-fields';
-import { type TEmailFieldMeta as EmailFieldMeta } from '@documenso/lib/types/field-meta';
+import { DEFAULT_EMAIL_OVERFLOW_MODE, type TEmailFieldMeta as EmailFieldMeta } from '@documenso/lib/types/field-meta';
 import { Input } from '@documenso/ui/primitives/input';
 import { Label } from '@documenso/ui/primitives/label';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@documenso/ui/primitives/select';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@documenso/ui/primitives/select';
+import { Trans, useLingui } from '@lingui/react/macro';
 
 type EmailFieldAdvancedSettingsProps = {
   fieldState: EmailFieldMeta;
@@ -25,13 +16,14 @@ export const EmailFieldAdvancedSettings = ({
   handleFieldChange,
   handleErrors,
 }: EmailFieldAdvancedSettingsProps) => {
-  const { _ } = useLingui();
+  const { t } = useLingui();
 
   const handleInput = (field: keyof EmailFieldMeta, value: string | boolean) => {
     const fontSize = field === 'fontSize' ? Number(value) : Number(fieldState.fontSize ?? 14);
 
     const errors = validateEmailFields({
       fontSize,
+      overflow: fieldState.overflow ?? DEFAULT_EMAIL_OVERFLOW_MODE,
       type: 'email',
     });
 
@@ -48,8 +40,8 @@ export const EmailFieldAdvancedSettings = ({
         <Input
           id="fontSize"
           type="number"
-          className="bg-background mt-2"
-          placeholder={_(msg`Field font size`)}
+          className="mt-2 bg-background"
+          placeholder={t`Field font size`}
           value={fieldState.fontSize}
           onChange={(e) => handleInput('fontSize', e.target.value)}
           min={8}
@@ -62,12 +54,9 @@ export const EmailFieldAdvancedSettings = ({
           <Trans>Text Align</Trans>
         </Label>
 
-        <Select
-          value={fieldState.textAlign}
-          onValueChange={(value) => handleInput('textAlign', value)}
-        >
-          <SelectTrigger className="bg-background mt-2">
-            <SelectValue placeholder="Select text align" />
+        <Select value={fieldState.textAlign} onValueChange={(value) => handleInput('textAlign', value)}>
+          <SelectTrigger className="mt-2 bg-background">
+            <SelectValue placeholder={t`Select text align`} />
           </SelectTrigger>
 
           <SelectContent>

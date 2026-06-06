@@ -1,9 +1,7 @@
+import { ZRecipientActionAuthTypesSchema } from '@documenso/lib/types/document-auth';
+import { zEmail } from '@documenso/lib/utils/zod';
 import { DocumentSigningOrder, RecipientRole } from '@prisma/client';
 import { z } from 'zod';
-
-import { ZRecipientActionAuthTypesSchema } from '@documenso/lib/types/document-auth';
-
-import { ZMapNegativeOneToUndefinedSchema } from '../document-flow/add-settings.types';
 
 export const ZAddTemplatePlacholderRecipientsFormSchema = z
   .object({
@@ -11,28 +9,27 @@ export const ZAddTemplatePlacholderRecipientsFormSchema = z
       z.object({
         formId: z.string().min(1),
         nativeId: z.number().optional(),
-        email: z.string().min(1).email(),
-        name: z.string(),
+        email: zEmail().min(1),
+        name: z.string().min(1, { message: 'Name is required' }),
         role: z.nativeEnum(RecipientRole),
         signingOrder: z.number().optional(),
-        actionAuth: ZMapNegativeOneToUndefinedSchema.pipe(
-          ZRecipientActionAuthTypesSchema.optional(),
-        ),
+        actionAuth: z.array(ZRecipientActionAuthTypesSchema).optional().default([]),
       }),
     ),
     signingOrder: z.nativeEnum(DocumentSigningOrder),
     allowDictateNextSigner: z.boolean().default(false),
   })
-  .refine(
-    (schema) => {
-      const emails = schema.signers.map((signer) => signer.email.toLowerCase());
 
-      return new Set(emails).size === emails.length;
+  .refine(
+    /*
+      Since placeholder emails are empty, we need to check that the names are unique.
+      If we don't do this, the app will add duplicate signers and merge them in the next step, where you add fields.
+    */
+    (schema) => {
+      const names = schema.signers.map((signer) => signer.name.trim());
+      return new Set(names).size === names.length;
     },
-    // Dirty hack to handle errors when .root is populated for an array type
-    { message: 'Signers must have unique emails', path: ['signers__root'] },
+    { message: 'Signers must have unique names', path: ['signers__root'] },
   );
 
-export type TAddTemplatePlacholderRecipientsFormSchema = z.infer<
-  typeof ZAddTemplatePlacholderRecipientsFormSchema
->;
+export type TAddTemplatePlacholderRecipientsFormSchema = z.infer<typeof ZAddTemplatePlacholderRecipientsFormSchema>;

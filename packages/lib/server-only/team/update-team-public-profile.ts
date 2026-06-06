@@ -1,5 +1,7 @@
 import { prisma } from '@documenso/prisma';
 
+import { buildTeamWhereQuery } from '../../utils/teams';
+
 export type UpdatePublicProfileOptions = {
   userId: number;
   teamId: number;
@@ -9,20 +11,9 @@ export type UpdatePublicProfileOptions = {
   };
 };
 
-export const updateTeamPublicProfile = async ({
-  userId,
-  teamId,
-  data,
-}: UpdatePublicProfileOptions) => {
+export const updateTeamPublicProfile = async ({ userId, teamId, data }: UpdatePublicProfileOptions) => {
   return await prisma.team.update({
-    where: {
-      id: teamId,
-      members: {
-        some: {
-          userId,
-        },
-      },
-    },
+    where: buildTeamWhereQuery({ teamId, userId }),
     data: {
       profile: {
         upsert: {

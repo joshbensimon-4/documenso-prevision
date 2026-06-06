@@ -1,6 +1,3 @@
-import { FieldType } from '@prisma/client';
-import { z } from 'zod';
-
 import { ZRecipientActionAuthSchema } from '@documenso/lib/types/document-auth';
 import {
   ZFieldHeightSchema,
@@ -11,6 +8,8 @@ import {
   ZFieldWidthSchema,
 } from '@documenso/lib/types/field';
 import { ZFieldAndMetaSchema, ZFieldMetaSchema } from '@documenso/lib/types/field-meta';
+import { FieldType } from '@prisma/client';
+import { z } from 'zod';
 
 const ZCreateFieldSchema = ZFieldAndMetaSchema.and(
   z.object({
@@ -110,10 +109,10 @@ export const ZSetDocumentFieldsRequestSchema = z.object({
   documentId: z.number(),
   fields: z.array(
     z.object({
-      formId: z.string().min(1),
-      nativeId: z.number().optional(),
+      id: z.number().optional(),
       type: z.nativeEnum(FieldType),
-      signerEmail: z.string().min(1),
+      recipientId: z.number().min(1),
+      envelopeItemId: z.string(),
       pageNumber: z.number().min(1),
       pageX: z.number().min(0),
       pageY: z.number().min(0),
@@ -132,10 +131,10 @@ export const ZSetFieldsForTemplateRequestSchema = z.object({
   templateId: z.number(),
   fields: z.array(
     z.object({
-      formId: z.string().min(1),
-      nativeId: z.number().optional(),
+      id: z.number().optional(),
       type: z.nativeEnum(FieldType),
-      signerEmail: z.string().min(1),
+      recipientId: z.number().min(1),
+      envelopeItemId: z.string(),
       pageNumber: z.number().min(1),
       pageX: z.number().min(0),
       pageY: z.number().min(0),
@@ -165,9 +164,7 @@ export const ZRemovedSignedFieldWithTokenMutationSchema = z.object({
   fieldId: z.number(),
 });
 
-export type TRemovedSignedFieldWithTokenMutationSchema = z.infer<
-  typeof ZRemovedSignedFieldWithTokenMutationSchema
->;
+export type TRemovedSignedFieldWithTokenMutationSchema = z.infer<typeof ZRemovedSignedFieldWithTokenMutationSchema>;
 
 export const ZGetFieldRequestSchema = z.object({
   fieldId: z.number(),

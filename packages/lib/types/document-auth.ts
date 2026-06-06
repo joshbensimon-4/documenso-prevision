@@ -5,12 +5,8 @@ import { ZAuthenticationResponseJSONSchema } from './webauthn';
 /**
  * All the available types of document authentication options for both access and action.
  */
-export const ZDocumentAuthTypesSchema = z.enum([
-  'ACCOUNT',
-  'PASSKEY',
-  'TWO_FACTOR_AUTH',
-  'EXPLICIT_NONE',
-]);
+export const ZDocumentAuthTypesSchema = z.enum(['ACCOUNT', 'PASSKEY', 'TWO_FACTOR_AUTH', 'PASSWORD', 'EXPLICIT_NONE']);
+
 export const DocumentAuth = ZDocumentAuthTypesSchema.Enum;
 
 const ZDocumentAuthAccountSchema = z.object({
@@ -27,9 +23,15 @@ const ZDocumentAuthPasskeySchema = z.object({
   tokenReference: z.string().min(1),
 });
 
+const ZDocumentAuthPasswordSchema = z.object({
+  type: z.literal(DocumentAuth.PASSWORD),
+  password: z.string().min(1),
+});
+
 const ZDocumentAuth2FASchema = z.object({
   type: z.literal(DocumentAuth.TWO_FACTOR_AUTH),
   token: z.string().min(4).max(10),
+  method: z.enum(['email', 'authenticator']).default('authenticator').optional(),
 });
 
 /**
@@ -40,6 +42,7 @@ export const ZDocumentAuthMethodsSchema = z.discriminatedUnion('type', [
   ZDocumentAuthExplicitNoneSchema,
   ZDocumentAuthPasskeySchema,
   ZDocumentAuth2FASchema,
+  ZDocumentAuthPasswordSchema,
 ]);
 
 /**
@@ -47,9 +50,12 @@ export const ZDocumentAuthMethodsSchema = z.discriminatedUnion('type', [
  *
  * Must keep these two in sync.
  */
-export const ZDocumentAccessAuthSchema = z.discriminatedUnion('type', [ZDocumentAuthAccountSchema]);
+export const ZDocumentAccessAuthSchema = z.discriminatedUnion('type', [
+  ZDocumentAuthAccountSchema,
+  ZDocumentAuth2FASchema,
+]);
 export const ZDocumentAccessAuthTypesSchema = z
-  .enum([DocumentAuth.ACCOUNT])
+  .enum([DocumentAuth.ACCOUNT, DocumentAuth.TWO_FACTOR_AUTH])
   .describe('The type of authentication required for the recipient to access the document.');
 
 /**
@@ -61,9 +67,10 @@ export const ZDocumentActionAuthSchema = z.discriminatedUnion('type', [
   ZDocumentAuthAccountSchema,
   ZDocumentAuthPasskeySchema,
   ZDocumentAuth2FASchema,
+  ZDocumentAuthPasswordSchema,
 ]);
 export const ZDocumentActionAuthTypesSchema = z
-  .enum([DocumentAuth.ACCOUNT, DocumentAuth.PASSKEY, DocumentAuth.TWO_FACTOR_AUTH])
+  .enum([DocumentAuth.ACCOUNT, DocumentAuth.PASSKEY, DocumentAuth.TWO_FACTOR_AUTH, DocumentAuth.PASSWORD])
   .describe(
     'The type of authentication required for the recipient to sign the document. This field is restricted to Enterprise plan users only.',
   );
@@ -75,9 +82,10 @@ export const ZDocumentActionAuthTypesSchema = z
  */
 export const ZRecipientAccessAuthSchema = z.discriminatedUnion('type', [
   ZDocumentAuthAccountSchema,
+  ZDocumentAuth2FASchema,
 ]);
 export const ZRecipientAccessAuthTypesSchema = z
-  .enum([DocumentAuth.ACCOUNT])
+  .enum([DocumentAuth.ACCOUNT, DocumentAuth.TWO_FACTOR_AUTH])
   .describe('The type of authentication required for the recipient to access the document.');
 
 /**
@@ -89,6 +97,7 @@ export const ZRecipientActionAuthSchema = z.discriminatedUnion('type', [
   ZDocumentAuthAccountSchema,
   ZDocumentAuthPasskeySchema,
   ZDocumentAuth2FASchema,
+  ZDocumentAuthPasswordSchema,
   ZDocumentAuthExplicitNoneSchema,
 ]);
 export const ZRecipientActionAuthTypesSchema = z
@@ -96,6 +105,7 @@ export const ZRecipientActionAuthTypesSchema = z
     DocumentAuth.ACCOUNT,
     DocumentAuth.PASSKEY,
     DocumentAuth.TWO_FACTOR_AUTH,
+    DocumentAuth.PASSWORD,
     DocumentAuth.EXPLICIT_NONE,
   ])
   .describe('The type of authentication required for the recipient to sign the document.');
@@ -110,18 +120,24 @@ export const RecipientActionAuth = ZRecipientActionAuthTypesSchema.Enum;
  */
 export const ZDocumentAuthOptionsSchema = z.preprocess(
   (unknownValue) => {
-    if (unknownValue) {
-      return unknownValue;
+    if (!unknownValue || typeof unknownValue !== 'object') {
+      return {
+        globalAccessAuth: [],
+        globalActionAuth: [],
+      };
     }
 
+    const globalAccessAuth = 'globalAccessAuth' in unknownValue ? processAuthValue(unknownValue.globalAccessAuth) : [];
+    const globalActionAuth = 'globalActionAuth' in unknownValue ? processAuthValue(unknownValue.globalActionAuth) : [];
+
     return {
-      globalAccessAuth: null,
-      globalActionAuth: null,
+      globalAccessAuth,
+      globalActionAuth,
     };
   },
   z.object({
-    globalAccessAuth: ZDocumentAccessAuthTypesSchema.nullable(),
-    globalActionAuth: ZDocumentActionAuthTypesSchema.nullable(),
+    globalAccessAuth: z.array(ZDocumentAccessAuthTypesSchema),
+    globalActionAuth: z.array(ZDocumentActionAuthTypesSchema),
   }),
 );
 
@@ -130,20 +146,43 @@ export const ZDocumentAuthOptionsSchema = z.preprocess(
  */
 export const ZRecipientAuthOptionsSchema = z.preprocess(
   (unknownValue) => {
-    if (unknownValue) {
-      return unknownValue;
+    if (!unknownValue || typeof unknownValue !== 'object') {
+      return {
+        accessAuth: [],
+        actionAuth: [],
+      };
     }
 
+    const accessAuth = 'accessAuth' in unknownValue ? processAuthValue(unknownValue.accessAuth) : [];
+    const actionAuth = 'actionAuth' in unknownValue ? processAuthValue(unknownValue.actionAuth) : [];
+
     return {
-      accessAuth: null,
-      actionAuth: null,
+      accessAuth,
+      actionAuth,
     };
   },
   z.object({
-    accessAuth: ZRecipientAccessAuthTypesSchema.nullable(),
-    actionAuth: ZRecipientActionAuthTypesSchema.nullable(),
+    accessAuth: z.array(ZRecipientAccessAuthTypesSchema),
+    actionAuth: z.array(ZRecipientActionAuthTypesSchema),
   }),
 );
+
+/**
+ * Utility function to process the auth value.
+ *
+ * Converts the old singular auth value to an array of auth values.
+ */
+const processAuthValue = (value: unknown) => {
+  if (value === null || value === undefined) {
+    return [];
+  }
+
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  return [value];
+};
 
 export type TDocumentAuth = z.infer<typeof ZDocumentAuthTypesSchema>;
 export type TDocumentAuthMethods = z.infer<typeof ZDocumentAuthMethodsSchema>;

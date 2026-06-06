@@ -1,22 +1,14 @@
+import { DEFAULT_DOCUMENT_DATE_FORMAT } from '@documenso/lib/constants/date-formats';
+import { DEFAULT_DOCUMENT_TIME_ZONE } from '@documenso/lib/constants/time-zones';
+import { ZDocumentEmailSettingsSchema } from '@documenso/lib/types/document-email';
+import { Button } from '@documenso/ui/primitives/button';
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@documenso/ui/primitives/form/form';
+import { Input } from '@documenso/ui/primitives/input';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Trans } from '@lingui/react/macro';
 import { DocumentDistributionMethod, DocumentSigningOrder, RecipientRole } from '@prisma/client';
 import { nanoid } from 'nanoid';
 import { useForm } from 'react-hook-form';
-
-import { DEFAULT_DOCUMENT_DATE_FORMAT } from '@documenso/lib/constants/date-formats';
-import { DEFAULT_DOCUMENT_TIME_ZONE } from '@documenso/lib/constants/time-zones';
-import { ZDocumentEmailSettingsSchema } from '@documenso/lib/types/document-email';
-import { Button } from '@documenso/ui/primitives/button';
-import {
-  Form,
-  FormControl,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from '@documenso/ui/primitives/form/form';
-import { Input } from '@documenso/ui/primitives/input';
 
 import { ConfigureDocumentAdvancedSettings } from './configure-document-advanced-settings';
 import { useConfigureDocument } from './configure-document-context';
@@ -25,9 +17,11 @@ import { ConfigureDocumentUpload } from './configure-document-upload';
 import {
   type TConfigureEmbedFormSchema,
   ZConfigureEmbedFormSchema,
+  ZConfigureTemplateEmbedFormSchema,
 } from './configure-document-view.types';
 
 export interface ConfigureDocumentViewProps {
+  type?: 'document' | 'template';
   onSubmit: (data: TConfigureEmbedFormSchema) => void | Promise<void>;
   defaultValues?: Partial<TConfigureEmbedFormSchema>;
   disableUpload?: boolean;
@@ -35,6 +29,7 @@ export interface ConfigureDocumentViewProps {
 }
 
 export const ConfigureDocumentView = ({
+  type = 'document',
   onSubmit,
   defaultValues,
   disableUpload,
@@ -42,14 +37,14 @@ export const ConfigureDocumentView = ({
   const { isTemplate } = useConfigureDocument();
 
   const form = useForm<TConfigureEmbedFormSchema>({
-    resolver: zodResolver(ZConfigureEmbedFormSchema),
+    resolver: zodResolver(type === 'template' ? ZConfigureTemplateEmbedFormSchema : ZConfigureEmbedFormSchema),
     defaultValues: {
       title: defaultValues?.title || '',
       signers: defaultValues?.signers || [
         {
           formId: nanoid(8),
-          name: isTemplate ? `Recipient ${1}` : '',
-          email: isTemplate ? `recipient.${1}@document.com` : '',
+          name: '',
+          email: '',
           role: RecipientRole.SIGNER,
           signingOrder: 1,
           disabled: false,
@@ -58,8 +53,7 @@ export const ConfigureDocumentView = ({
       meta: {
         subject: defaultValues?.meta?.subject || '',
         message: defaultValues?.meta?.message || '',
-        distributionMethod:
-          defaultValues?.meta?.distributionMethod || DocumentDistributionMethod.EMAIL,
+        distributionMethod: defaultValues?.meta?.distributionMethod || DocumentDistributionMethod.EMAIL,
         emailSettings: defaultValues?.meta?.emailSettings || ZDocumentEmailSettingsSchema.parse({}),
         dateFormat: defaultValues?.meta?.dateFormat || DEFAULT_DOCUMENT_DATE_FORMAT,
         timezone: defaultValues?.meta?.timezone || DEFAULT_DOCUMENT_TIME_ZONE,
@@ -83,7 +77,7 @@ export const ConfigureDocumentView = ({
   return (
     <div className="flex w-full flex-col space-y-8">
       <div>
-        <h2 className="text-foreground mb-1 text-xl font-semibold">
+        <h2 className="mb-1 font-semibold text-foreground text-xl">
           {isTemplate ? <Trans>Configure Template</Trans> : <Trans>Configure Document</Trans>}
         </h2>
 
@@ -121,12 +115,7 @@ export const ConfigureDocumentView = ({
           <ConfigureDocumentAdvancedSettings control={control} isSubmitting={isSubmitting} />
 
           <div className="flex justify-end">
-            <Button
-              type="button"
-              onClick={onFormSubmit}
-              disabled={isSubmitting}
-              className="w-full sm:w-auto"
-            >
+            <Button type="button" onClick={onFormSubmit} disabled={isSubmitting} className="w-full sm:w-auto">
               <Trans>Continue</Trans>
             </Button>
           </div>

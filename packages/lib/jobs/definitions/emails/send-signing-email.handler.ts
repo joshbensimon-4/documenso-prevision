@@ -1,55 +1,69 @@
-import { createElement } from 'react';
-
-import { msg } from '@lingui/core/macro';
-import { DocumentSource, DocumentStatus, RecipientRole, SendStatus } from '@prisma/client';
-
 import { mailer } from '@documenso/email/mailer';
 import DocumentInviteEmailTemplate from '@documenso/email/templates/document-invite';
+import { isRecipientEmailValidForSending } from '@documenso/lib/utils/recipients';
 import { prisma } from '@documenso/prisma';
+import { msg } from '@lingui/core/macro';
+import {
+  DocumentSource,
+  DocumentStatus,
+  EnvelopeType,
+  OrganisationType,
+  RecipientRole,
+  SendStatus,
+} from '@prisma/client';
+import { createElement } from 'react';
 
 import { getI18nInstance } from '../../../client-only/providers/i18n-server';
 import { NEXT_PUBLIC_WEBAPP_URL } from '../../../constants/app';
-import { FROM_ADDRESS, FROM_NAME } from '../../../constants/email';
-import {
-  RECIPIENT_ROLES_DESCRIPTION,
-  RECIPIENT_ROLE_TO_EMAIL_TYPE,
-} from '../../../constants/recipient-roles';
+import { RECIPIENT_ROLE_TO_EMAIL_TYPE, RECIPIENT_ROLES_DESCRIPTION } from '../../../constants/recipient-roles';
+import { getEmailContext } from '../../../server-only/email/get-email-context';
+import { assertOrganisationRatesAndLimits } from '../../../server-only/rate-limit/assert-organisation-rates-and-limits';
+import { updateRecipientNextReminder } from '../../../server-only/recipient/update-recipient-next-reminder';
 import { DOCUMENT_AUDIT_LOG_TYPE } from '../../../types/document-audit-logs';
 import { extractDerivedDocumentEmailSettings } from '../../../types/document-email';
 import { createDocumentAuditLogData } from '../../../utils/document-audit-logs';
+import { unsafeBuildEnvelopeIdQuery } from '../../../utils/envelope';
 import { renderCustomEmailTemplate } from '../../../utils/render-custom-email-template';
 import { renderEmailWithI18N } from '../../../utils/render-email-with-i18n';
-import { teamGlobalSettingsToBranding } from '../../../utils/team-global-settings-to-branding';
 import type { JobRunIO } from '../../client/_internal/job';
 import type { TSendSigningEmailJobDefinition } from './send-signing-email';
 
-export const run = async ({
-  payload,
-  io,
-}: {
-  payload: TSendSigningEmailJobDefinition;
-  io: JobRunIO;
-}) => {
+export const run = async ({ payload, io }: { payload: TSendSigningEmailJobDefinition; io: JobRunIO }) => {
   const { userId, documentId, recipientId, requestMetadata } = payload;
 
-  const [user, document, recipient] = await Promise.all([
+  const [user, envelope, recipient] = await Promise.all([
     prisma.user.findFirstOrThrow({
       where: {
         id: userId,
       },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+      },
     }),
-    prisma.document.findFirstOrThrow({
+    prisma.envelope.findFirstOrThrow({
       where: {
-        id: documentId,
+        ...unsafeBuildEnvelopeIdQuery(
+          {
+            type: 'documentId',
+            id: documentId,
+          },
+          EnvelopeType.DOCUMENT,
+        ),
         status: DocumentStatus.PENDING,
       },
       include: {
         documentMeta: true,
+        user: {
+          select: {
+            disabled: true,
+          },
+        },
         team: {
           select: {
             teamEmail: true,
             name: true,
-            teamGlobalSettings: true,
           },
         },
       },
@@ -61,41 +75,62 @@ export const run = async ({
     }),
   ]);
 
-  const { documentMeta, team } = document;
+  const { documentMeta, team } = envelope;
 
   if (recipient.role === RecipientRole.CC) {
     return;
   }
 
   const isRecipientSigningRequestEmailEnabled = extractDerivedDocumentEmailSettings(
-    document.documentMeta,
+    envelope.documentMeta,
   ).recipientSigningRequest;
 
   if (!isRecipientSigningRequestEmailEnabled) {
     return;
   }
 
-  const customEmail = document?.documentMeta;
-  const isDirectTemplate = document.source === DocumentSource.TEMPLATE_DIRECT_LINK;
-  const isTeamDocument = document.teamId !== null;
+  const {
+    branding,
+    emailLanguage,
+    settings,
+    organisationType,
+    senderEmail,
+    replyToEmail,
+    organisationId,
+    claims,
+    isOrganisationOwnerDisabled,
+  } = await getEmailContext({
+    emailType: 'RECIPIENT',
+    source: {
+      type: 'team',
+      teamId: envelope.teamId,
+    },
+    meta: envelope.documentMeta,
+  });
+
+  // Don't send signing invitations on behalf of a disabled (e.g. banned) account.
+  if (envelope.user.disabled || isOrganisationOwnerDisabled) {
+    return;
+  }
+
+  const customEmail = envelope?.documentMeta;
+  const isDirectTemplate = envelope.source === DocumentSource.TEMPLATE_DIRECT_LINK;
 
   const recipientEmailType = RECIPIENT_ROLE_TO_EMAIL_TYPE[recipient.role];
 
   const { email, name } = recipient;
   const selfSigner = email === user.email;
 
-  const i18n = await getI18nInstance(documentMeta?.language);
+  const i18n = await getI18nInstance(emailLanguage);
 
-  const recipientActionVerb = i18n
-    ._(RECIPIENT_ROLES_DESCRIPTION[recipient.role].actionVerb)
-    .toLowerCase();
+  const recipientActionVerb = i18n._(RECIPIENT_ROLES_DESCRIPTION[recipient.role].actionVerb).toLowerCase();
 
   let emailMessage = customEmail?.message || '';
   let emailSubject = i18n._(msg`Please ${recipientActionVerb} this document`);
 
   if (selfSigner) {
     emailMessage = i18n._(
-      msg`You have initiated the document ${`"${document.title}"`} that requires you to ${recipientActionVerb} it.`,
+      msg`You have initiated the document ${`"${envelope.title}"`} that requires you to ${recipientActionVerb} it.`,
     );
     emailSubject = i18n._(msg`Please ${recipientActionVerb} your document`);
   }
@@ -104,12 +139,10 @@ export const run = async ({
     emailMessage = i18n._(
       msg`A document was created by your direct template that requires you to ${recipientActionVerb} it.`,
     );
-    emailSubject = i18n._(
-      msg`Please ${recipientActionVerb} this document created by your direct template`,
-    );
+    emailSubject = i18n._(msg`Please ${recipientActionVerb} this document created by your direct template`);
   }
 
-  if (isTeamDocument && team) {
+  if (organisationType === OrganisationType.ORGANISATION) {
     emailSubject = i18n._(msg`${team.name} invited you to ${recipientActionVerb} a document`);
     emailMessage = customEmail?.message ?? '';
 
@@ -117,9 +150,9 @@ export const run = async ({
       const inviterName = user.name || '';
 
       emailMessage = i18n._(
-        team.teamGlobalSettings?.includeSenderDetails
-          ? msg`${inviterName} on behalf of "${team.name}" has invited you to ${recipientActionVerb} the document "${document.title}".`
-          : msg`${team.name} has invited you to ${recipientActionVerb} the document "${document.title}".`,
+        settings.includeSenderDetails
+          ? msg`${inviterName} on behalf of "${team.name}" has invited you to ${recipientActionVerb} the document "${envelope.title}".`
+          : msg`${team.name} has invited you to ${recipientActionVerb} the document "${envelope.title}".`,
       );
     }
   }
@@ -127,58 +160,73 @@ export const run = async ({
   const customEmailTemplate = {
     'signer.name': name,
     'signer.email': email,
-    'document.name': document.title,
+    'document.name': envelope.title,
   };
 
   const assetBaseUrl = NEXT_PUBLIC_WEBAPP_URL() || 'http://localhost:3000';
   const signDocumentLink = `${NEXT_PUBLIC_WEBAPP_URL()}/sign/${recipient.token}`;
 
   const template = createElement(DocumentInviteEmailTemplate, {
-    documentName: document.title,
+    documentName: envelope.title,
     inviterName: user.name || undefined,
-    inviterEmail: isTeamDocument ? team?.teamEmail?.email || user.email : user.email,
+    inviterEmail:
+      organisationType === OrganisationType.ORGANISATION ? team?.teamEmail?.email || user.email : user.email,
     assetBaseUrl,
     signDocumentLink,
     customBody: renderCustomEmailTemplate(emailMessage, customEmailTemplate),
     role: recipient.role,
     selfSigner,
-    isTeamInvite: isTeamDocument,
+    organisationType,
     teamName: team?.name,
     teamEmail: team?.teamEmail?.email,
-    includeSenderDetails: team?.teamGlobalSettings?.includeSenderDetails,
+    includeSenderDetails: settings.includeSenderDetails,
   });
 
-  await io.runTask('send-signing-email', async () => {
-    const branding = document.team?.teamGlobalSettings
-      ? teamGlobalSettingsToBranding(document.team.teamGlobalSettings)
-      : undefined;
+  if (isRecipientEmailValidForSending(recipient)) {
+    try {
+      await assertOrganisationRatesAndLimits({
+        organisationId,
+        organisationClaim: claims,
+        type: 'email',
+        count: 1,
+      });
+    } catch (_err) {
+      io.logger.warn({
+        msg: 'Recipient signing email dropped: org rate limit exceeded',
+        organisationId,
+        recipientId: recipient.id,
+        envelopeId: envelope.id,
+      });
 
-    const [html, text] = await Promise.all([
-      renderEmailWithI18N(template, { lang: documentMeta?.language, branding }),
-      renderEmailWithI18N(template, {
-        lang: documentMeta?.language,
-        branding,
-        plainText: true,
-      }),
-    ]);
+      // Job is consumed and NOT retried.
+      return;
+    }
 
-    await mailer.sendMail({
-      to: {
-        name: recipient.name,
-        address: recipient.email,
-      },
-      from: {
-        name: FROM_NAME,
-        address: FROM_ADDRESS,
-      },
-      subject: renderCustomEmailTemplate(
-        documentMeta?.subject || emailSubject,
-        customEmailTemplate,
-      ),
-      html,
-      text,
+    await io.runTask('send-signing-email', async () => {
+      const [html, text] = await Promise.all([
+        renderEmailWithI18N(template, { lang: emailLanguage, branding }),
+        renderEmailWithI18N(template, {
+          lang: emailLanguage,
+          branding,
+          plainText: true,
+        }),
+      ]);
+
+      await mailer.sendMail({
+        to: {
+          name: recipient.name,
+          address: recipient.email,
+        },
+        from: senderEmail,
+        replyTo: replyToEmail,
+        subject: renderCustomEmailTemplate(documentMeta?.subject || emailSubject, customEmailTemplate),
+        html,
+        text,
+      });
     });
-  });
+  }
+
+  const sentAt = new Date();
 
   await io.runTask('update-recipient', async () => {
     await prisma.recipient.update({
@@ -187,26 +235,33 @@ export const run = async ({
       },
       data: {
         sendStatus: SendStatus.SENT,
+        sentAt,
       },
     });
   });
 
-  await io.runTask('store-audit-log', async () => {
-    await prisma.documentAuditLog.create({
-      data: createDocumentAuditLogData({
-        type: DOCUMENT_AUDIT_LOG_TYPE.EMAIL_SENT,
-        documentId: document.id,
-        user,
-        requestMetadata,
-        data: {
-          emailType: recipientEmailType,
-          recipientId: recipient.id,
-          recipientName: recipient.name,
-          recipientEmail: recipient.email,
-          recipientRole: recipient.role,
-          isResending: false,
-        },
-      }),
-    });
+  // Compute the first reminder time based on the envelope's effective settings.
+  await updateRecipientNextReminder({
+    recipientId: recipient.id,
+    envelopeId: envelope.id,
+    sentAt,
+    lastReminderSentAt: null,
+  });
+
+  await prisma.documentAuditLog.create({
+    data: createDocumentAuditLogData({
+      type: DOCUMENT_AUDIT_LOG_TYPE.EMAIL_SENT,
+      envelopeId: envelope.id,
+      user,
+      requestMetadata,
+      data: {
+        emailType: recipientEmailType,
+        recipientId: recipient.id,
+        recipientName: recipient.name,
+        recipientEmail: recipient.email,
+        recipientRole: recipient.role,
+        isResending: false,
+      },
+    }),
   });
 };

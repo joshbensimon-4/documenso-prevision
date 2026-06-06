@@ -1,18 +1,12 @@
+import { useFieldPageCoords } from '@documenso/lib/client-only/hooks/use-field-page-coords';
 import type { Field } from '@prisma/client';
 import { TooltipArrow } from '@radix-ui/react-tooltip';
 import type { VariantProps } from 'class-variance-authority';
 import { cva } from 'class-variance-authority';
 import { createPortal } from 'react-dom';
 
-import { useFieldPageCoords } from '@documenso/lib/client-only/hooks/use-field-page-coords';
-
 import { cn } from '../..//lib/utils';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '../..//primitives/tooltip';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../..//primitives/tooltip';
 
 const tooltipVariants = cva('font-semibold', {
   variants: {
@@ -29,7 +23,7 @@ const tooltipVariants = cva('font-semibold', {
 interface FieldToolTipProps extends VariantProps<typeof tooltipVariants> {
   children: React.ReactNode;
   className?: string;
-  field: Field;
+  field: Pick<Field, 'id' | 'inserted' | 'fieldMeta' | 'positionX' | 'positionY' | 'width' | 'height' | 'page'>;
 }
 
 /**
@@ -38,8 +32,17 @@ interface FieldToolTipProps extends VariantProps<typeof tooltipVariants> {
 export function FieldToolTip({ children, color, className = '', field }: FieldToolTipProps) {
   const coords = useFieldPageCoords(field);
 
+  const onTooltipContentClick = () => {
+    const $fieldEl = document.querySelector<HTMLButtonElement>(`#field-${field.id} > button`);
+
+    if ($fieldEl) {
+      $fieldEl.click();
+    }
+  };
+
   return createPortal(
     <div
+      id="field-tooltip"
       className={cn('pointer-events-none absolute')}
       style={{
         top: `${coords.y}px`,
@@ -52,7 +55,11 @@ export function FieldToolTip({ children, color, className = '', field }: FieldTo
         <Tooltip delayDuration={0} open={!field.inserted || !field.fieldMeta}>
           <TooltipTrigger className="absolute inset-0 w-full"></TooltipTrigger>
 
-          <TooltipContent className={tooltipVariants({ color, className })} sideOffset={2}>
+          <TooltipContent
+            className={tooltipVariants({ color, className: cn(className, 'z-40') })}
+            sideOffset={2}
+            onClick={onTooltipContentClick}
+          >
             {children}
             <TooltipArrow />
           </TooltipContent>

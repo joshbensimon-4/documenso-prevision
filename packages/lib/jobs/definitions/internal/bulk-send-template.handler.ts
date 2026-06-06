@@ -1,45 +1,39 @@
-import { createElement } from 'react';
-
-import { msg } from '@lingui/macro';
-import type { TeamGlobalSettings } from '@prisma/client';
-import { parse } from 'csv-parse/sync';
-import { z } from 'zod';
-
 import { mailer } from '@documenso/email/mailer';
 import { BulkSendCompleteEmail } from '@documenso/email/templates/bulk-send-complete';
 import { sendDocument } from '@documenso/lib/server-only/document/send-document';
 import { createDocumentFromTemplate } from '@documenso/lib/server-only/template/create-document-from-template';
 import { getTemplateById } from '@documenso/lib/server-only/template/get-template-by-id';
+import { zEmail } from '@documenso/lib/utils/zod';
 import { prisma } from '@documenso/prisma';
+import { msg } from '@lingui/macro';
+import { parse } from 'csv-parse/sync';
+import { createElement } from 'react';
+import { z } from 'zod';
 
 import { getI18nInstance } from '../../../client-only/providers/i18n-server';
 import { NEXT_PUBLIC_WEBAPP_URL } from '../../../constants/app';
-import { FROM_ADDRESS, FROM_NAME } from '../../../constants/email';
 import { AppError } from '../../../errors/app-error';
+import { getEmailContext } from '../../../server-only/email/get-email-context';
 import { renderEmailWithI18N } from '../../../utils/render-email-with-i18n';
-import { teamGlobalSettingsToBranding } from '../../../utils/team-global-settings-to-branding';
 import type { JobRunIO } from '../../client/_internal/job';
 import type { TBulkSendTemplateJobDefinition } from './bulk-send-template';
 
 const ZRecipientRowSchema = z.object({
   name: z.string().optional(),
   email: z.union([
-    z.string().email({ message: 'Value must be a valid email or empty string' }),
+    zEmail('Value must be a valid email or empty string'),
     z.string().max(0, { message: 'Value must be a valid email or empty string' }),
   ]),
 });
 
-export const run = async ({
-  payload,
-  io,
-}: {
-  payload: TBulkSendTemplateJobDefinition;
-  io: JobRunIO;
-}) => {
+export const run = async ({ payload, io }: { payload: TBulkSendTemplateJobDefinition; io: JobRunIO }) => {
   const { userId, teamId, templateId, csvContent, sendImmediately, requestMetadata } = payload;
 
   const template = await getTemplateById({
-    id: templateId,
+    id: {
+      type: 'templateId',
+      id: templateId,
+    },
     userId,
     teamId,
   });
@@ -48,7 +42,8 @@ export const run = async ({
     throw new Error('Template not found');
   }
 
-  const rows = parse(csvContent, { columns: true, skip_empty_lines: true });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rows = parse<any>(csvContent, { columns: true, skip_empty_lines: true });
 
   if (rows.length > 100) {
     throw new Error('Maximum 100 rows allowed per upload');
@@ -79,7 +74,7 @@ export const run = async ({
   const results = {
     success: 0,
     failed: 0,
-    errors: Array<string>(),
+    errors: [] as string[],
   };
 
   // Process each row
@@ -101,9 +96,12 @@ export const run = async ({
         }
       }
 
-      const document = await io.runTask(`create-document-${rowIndex}`, async () => {
+      const envelope = await io.runTask(`create-document-${rowIndex}`, async () => {
         return await createDocumentFromTemplate({
-          templateId: template.id,
+          id: {
+            type: 'templateId',
+            id: template.id,
+          },
           userId,
           teamId,
           recipients: recipients.map((recipient, index) => {
@@ -126,7 +124,10 @@ export const run = async ({
       if (sendImmediately) {
         await io.runTask(`send-document-${rowIndex}`, async () => {
           await sendDocument({
-            documentId: document.id,
+            id: {
+              type: 'envelopeId',
+              id: envelope.id,
+            },
             userId,
             teamId,
             requestMetadata: {
@@ -163,29 +164,23 @@ export const run = async ({
       assetBaseUrl: NEXT_PUBLIC_WEBAPP_URL(),
     });
 
-    let teamGlobalSettings: TeamGlobalSettings | undefined | null;
+    const { branding, emailLanguage, senderEmail } = await getEmailContext({
+      emailType: 'INTERNAL',
+      source: {
+        type: 'team',
+        teamId,
+      },
+    });
 
-    if (template.teamId) {
-      teamGlobalSettings = await prisma.teamGlobalSettings.findUnique({
-        where: {
-          teamId: template.teamId,
-        },
-      });
-    }
-
-    const branding = teamGlobalSettings
-      ? teamGlobalSettingsToBranding(teamGlobalSettings)
-      : undefined;
-
-    const i18n = await getI18nInstance(teamGlobalSettings?.documentLanguage);
+    const i18n = await getI18nInstance(emailLanguage);
 
     const [html, text] = await Promise.all([
       renderEmailWithI18N(completionTemplate, {
-        lang: teamGlobalSettings?.documentLanguage,
+        lang: emailLanguage,
         branding,
       }),
       renderEmailWithI18N(completionTemplate, {
-        lang: teamGlobalSettings?.documentLanguage,
+        lang: emailLanguage,
         branding,
         plainText: true,
       }),
@@ -196,10 +191,7 @@ export const run = async ({
         name: user.name || '',
         address: user.email,
       },
-      from: {
-        name: FROM_NAME,
-        address: FROM_ADDRESS,
-      },
+      from: senderEmail,
       subject: i18n._(msg`Bulk Send Complete: ${template.title}`),
       html,
       text,

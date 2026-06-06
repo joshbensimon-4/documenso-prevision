@@ -7,8 +7,7 @@ export const createEmbeddingPresignTokenMeta: TrpcRouteMeta = {
     method: 'POST',
     path: '/embedding/create-presign-token',
     summary: 'Create embedding presign token',
-    description:
-      'Creates a presign token for embedding operations with configurable expiration time',
+    description: 'Creates a presign token for embedding operations with configurable expiration time',
     tags: ['Embedding'],
   },
 };
@@ -21,6 +20,12 @@ export const ZCreateEmbeddingPresignTokenRequestSchema = z.object({
     .optional()
     .default(60)
     .describe('Expiration time in minutes (default: 60, max: 10,080)'),
+  scope: z
+    .string()
+    .optional()
+    .describe(
+      'Resource restriction. V1 embeds only support documentId:1, templateId:2. V2 embeds only support envelopeId:envelope_123',
+    ),
 });
 
 export const ZCreateEmbeddingPresignTokenResponseSchema = z.object({
@@ -29,10 +34,6 @@ export const ZCreateEmbeddingPresignTokenResponseSchema = z.object({
   expiresIn: z.number().describe('Expiration time in seconds'),
 });
 
-export type TCreateEmbeddingPresignTokenRequestSchema = z.infer<
-  typeof ZCreateEmbeddingPresignTokenRequestSchema
->;
+export type TCreateEmbeddingPresignTokenRequestSchema = z.infer<typeof ZCreateEmbeddingPresignTokenRequestSchema>;
 
-export type TCreateEmbeddingPresignTokenResponseSchema = z.infer<
-  typeof ZCreateEmbeddingPresignTokenResponseSchema
->;
+export type TCreateEmbeddingPresignTokenResponseSchema = z.infer<typeof ZCreateEmbeddingPresignTokenResponseSchema>;

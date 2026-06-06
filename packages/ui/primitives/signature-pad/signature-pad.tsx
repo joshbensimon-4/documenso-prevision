@@ -1,11 +1,11 @@
-import type { HTMLAttributes } from 'react';
-import { useState } from 'react';
-
-import { KeyboardIcon, UploadCloudIcon } from 'lucide-react';
-import { match } from 'ts-pattern';
-
 import { DocumentSignatureType } from '@documenso/lib/constants/document';
 import { isBase64Image } from '@documenso/lib/constants/signatures';
+
+import { Trans } from '@lingui/react/macro';
+import { KeyboardIcon, UploadCloudIcon } from 'lucide-react';
+import type { HTMLAttributes } from 'react';
+import { useState } from 'react';
+import { match } from 'ts-pattern';
 
 import { SignatureIcon } from '../../icons/signature';
 import { cn } from '../../lib/utils';
@@ -20,6 +20,7 @@ export type SignaturePadValue = {
 };
 
 export type SignaturePadProps = Omit<HTMLAttributes<HTMLCanvasElement>, 'onChange'> & {
+  fullName?: string;
   value?: string;
   onChange?: (_value: SignaturePadValue) => void;
 
@@ -33,6 +34,7 @@ export type SignaturePadProps = Omit<HTMLAttributes<HTMLCanvasElement>, 'onChang
 };
 
 export const SignaturePad = ({
+  fullName,
   value = '',
   onChange,
   disabled = false,
@@ -146,51 +148,44 @@ export const SignaturePad = ({
         {drawSignatureEnabled && (
           <TabsTrigger value="draw">
             <SignatureIcon className="mr-2 size-4" />
-            Draw
+            <Trans context="Draw signature">Draw</Trans>
           </TabsTrigger>
         )}
 
         {typedSignatureEnabled && (
           <TabsTrigger value="text">
             <KeyboardIcon className="mr-2 size-4" />
-            Type
+            <Trans context="Type signature">Type</Trans>
           </TabsTrigger>
         )}
 
         {uploadSignatureEnabled && (
           <TabsTrigger value="image">
             <UploadCloudIcon className="mr-2 size-4" />
-            Upload
+            <Trans context="Upload signature">Upload</Trans>
           </TabsTrigger>
         )}
       </TabsList>
 
       <TabsContent
         value="draw"
-        className="border-border aspect-signature-pad dark:bg-background relative flex items-center justify-center rounded-md border bg-neutral-50 text-center"
+        className="relative flex aspect-signature-pad items-center justify-center rounded-md border border-border bg-muted/25 text-center"
       >
-        <SignaturePadDraw
-          className="h-full w-full"
-          onChange={onDrawSignatureChange}
-          value={drawSignature}
-        />
+        <SignaturePadDraw className="h-full w-full" onChange={onDrawSignatureChange} value={drawSignature} />
       </TabsContent>
 
       <TabsContent
         value="text"
-        className="border-border aspect-signature-pad dark:bg-background relative flex items-center justify-center rounded-md border bg-neutral-50 text-center"
+        className="relative flex aspect-signature-pad items-center justify-center rounded-md border border-border bg-muted/25 text-center"
       >
-        <SignaturePadType value={typedSignature} onChange={onTypedSignatureChange} />
+        <SignaturePadType value={typedSignature} defaultValue={fullName} onChange={onTypedSignatureChange} />
       </TabsContent>
 
       <TabsContent
         value="image"
-        className={cn(
-          'border-border aspect-signature-pad dark:bg-background relative rounded-md border bg-neutral-50',
-          {
-            'bg-white': imageSignature,
-          },
-        )}
+        className={cn('relative aspect-signature-pad rounded-md border border-border bg-muted/25', {
+          'bg-background': imageSignature,
+        })}
       >
         <SignaturePadUpload value={imageSignature} onChange={onImageSignatureChange} />
       </TabsContent>

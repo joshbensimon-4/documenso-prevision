@@ -1,6 +1,8 @@
 declare namespace NodeJS {
   export interface ProcessEnv {
+    PORT?: string;
     NEXT_PUBLIC_WEBAPP_URL?: string;
+    NEXT_PRIVATE_DOCUMENSO_LICENSE_KEY?: string;
 
     NEXT_PRIVATE_GOOGLE_CLIENT_ID?: string;
     NEXT_PRIVATE_GOOGLE_CLIENT_SECRET?: string;
@@ -15,10 +17,12 @@ declare namespace NodeJS {
     NEXT_PRIVATE_ENCRYPTION_KEY: string;
     NEXT_PRIVATE_ENCRYPTION_SECONDARY_KEY: string;
 
+    NEXT_PRIVATE_LOGGER_FILE_PATH?: string;
+
     NEXT_PRIVATE_STRIPE_API_KEY: string;
     NEXT_PRIVATE_STRIPE_WEBHOOK_SECRET: string;
 
-    NEXT_PUBLIC_UPLOAD_TRANSPORT?: 'database' | 's3';
+    NEXT_PUBLIC_UPLOAD_TRANSPORT?: 'database' | 's3' | 'azure-blob';
     NEXT_PRIVATE_UPLOAD_ENDPOINT?: string;
     NEXT_PRIVATE_UPLOAD_FORCE_PATH_STYLE?: string;
     NEXT_PRIVATE_UPLOAD_REGION?: string;
@@ -28,6 +32,10 @@ declare namespace NodeJS {
     NEXT_PRIVATE_UPLOAD_DISTRIBUTION_DOMAIN?: string;
     NEXT_PRIVATE_UPLOAD_DISTRIBUTION_KEY_ID?: string;
     NEXT_PRIVATE_UPLOAD_DISTRIBUTION_KEY_CONTENTS?: string;
+    NEXT_PRIVATE_UPLOAD_AZURE_ACCOUNT_NAME?: string;
+    NEXT_PRIVATE_UPLOAD_AZURE_ACCOUNT_KEY?: string;
+    NEXT_PRIVATE_UPLOAD_AZURE_CONTAINER?: string;
+    NEXT_PRIVATE_UPLOAD_AZURE_ENDPOINT?: string;
 
     NEXT_PRIVATE_SIGNING_TRANSPORT?: 'local' | 'http' | 'gcloud-hsm';
     NEXT_PRIVATE_SIGNING_PASSPHRASE?: string;
@@ -38,6 +46,12 @@ declare namespace NodeJS {
     NEXT_PRIVATE_SIGNING_GCLOUD_HSM_PUBLIC_CRT_FILE_PATH?: string;
     NEXT_PRIVATE_SIGNING_GCLOUD_HSM_PUBLIC_CRT_FILE_CONTENTS?: string;
     NEXT_PRIVATE_SIGNING_GCLOUD_APPLICATION_CREDENTIALS_CONTENTS?: string;
+    NEXT_PRIVATE_SIGNING_GCLOUD_HSM_CERT_CHAIN_FILE_PATH?: string;
+    NEXT_PRIVATE_SIGNING_GCLOUD_HSM_CERT_CHAIN_CONTENTS?: string;
+    NEXT_PRIVATE_SIGNING_GCLOUD_HSM_SECRET_MANAGER_CERT_PATH?: string;
+    NEXT_PRIVATE_SIGNING_TIMESTAMP_AUTHORITY?: string;
+    NEXT_PUBLIC_SIGNING_CONTACT_INFO?: string;
+    NEXT_PRIVATE_USE_LEGACY_SIGNING_SUBFILTER?: string;
 
     NEXT_PRIVATE_SMTP_TRANSPORT?: 'mailchannels' | 'resend' | 'smtp-auth' | 'smtp-api';
 
@@ -64,10 +78,24 @@ declare namespace NodeJS {
     NEXT_PRIVATE_SMTP_FROM_ADDRESS?: string;
 
     NEXT_PUBLIC_DISABLE_SIGNUP?: string;
+    NEXT_PUBLIC_DISABLE_EMAIL_PASSWORD_SIGNUP?: string;
+    NEXT_PUBLIC_DISABLE_GOOGLE_SIGNUP?: string;
+    NEXT_PUBLIC_DISABLE_MICROSOFT_SIGNUP?: string;
+    NEXT_PUBLIC_DISABLE_OIDC_SIGNUP?: string;
+    NEXT_PRIVATE_ALLOWED_SIGNUP_DOMAINS?: string;
 
     NEXT_PRIVATE_BROWSERLESS_URL?: string;
 
-    NEXT_PRIVATE_JOBS_PROVIDER?: 'inngest' | 'local';
+    NEXT_PRIVATE_JOBS_PROVIDER?: 'inngest' | 'local' | 'bullmq';
+
+    NEXT_PUBLIC_USE_INTERNAL_URL_BROWSERLESS?: string;
+
+    /**
+     * Redis / BullMQ environment variables
+     */
+    NEXT_PRIVATE_REDIS_URL?: string;
+    NEXT_PRIVATE_REDIS_PREFIX?: string;
+    NEXT_PRIVATE_BULLMQ_CONCURRENCY?: string;
 
     /**
      * Inngest environment variables
@@ -77,11 +105,22 @@ declare namespace NodeJS {
     NEXT_PRIVATE_INNGEST_APP_ID?: string;
     NEXT_PRIVATE_INNGEST_EVENT_KEY?: string;
 
-    NEXT_PRIVATE_LOGGER_HONEY_BADGER_API_KEY?: string;
-
     POSTGRES_URL?: string;
     DATABASE_URL?: string;
     POSTGRES_PRISMA_URL?: string;
     POSTGRES_URL_NON_POOLING?: string;
+
+    /**
+     * Cloudflare Turnstile environment variables
+     */
+    NEXT_PUBLIC_TURNSTILE_SITE_KEY?: string;
+    NEXT_PRIVATE_TURNSTILE_SECRET_KEY?: string;
+
+    /**
+     * Google Vertex AI environment variables
+     */
+    GOOGLE_VERTEX_PROJECT_ID?: string;
+    GOOGLE_VERTEX_LOCATION?: string;
+    GOOGLE_VERTEX_API_KEY?: string;
   }
 }

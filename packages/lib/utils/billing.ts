@@ -1,36 +1,35 @@
-import type { Subscription } from '@prisma/client';
-import { SubscriptionStatus } from '@prisma/client';
+import type { Subscription } from '@documenso/prisma/generated/zod/modelSchema/SubscriptionSchema';
 
-/**
- * Returns true if there is a subscription that is active and is one of the provided price IDs.
- */
-export const subscriptionsContainsActivePlan = (
-  subscriptions: Subscription[],
-  priceIds: string[],
-  allowPastDue?: boolean,
-) => {
-  const allowedSubscriptionStatuses: SubscriptionStatus[] = [SubscriptionStatus.ACTIVE];
+import { IS_BILLING_ENABLED } from '../constants/app';
+import { AppError, AppErrorCode } from '../errors/app-error';
+import type { StripeOrganisationCreateMetadata } from '../types/subscription';
 
-  if (allowPastDue) {
-    allowedSubscriptionStatuses.push(SubscriptionStatus.PAST_DUE);
-  }
+export const generateStripeOrganisationCreateMetadata = (organisationName: string, userId: number) => {
+  const metadata: StripeOrganisationCreateMetadata = {
+    organisationName,
+    userId,
+  };
 
-  return subscriptions.some(
-    (subscription) =>
-      allowedSubscriptionStatuses.includes(subscription.status) &&
-      priceIds.includes(subscription.priceId),
-  );
+  return {
+    organisationCreateData: JSON.stringify(metadata),
+  };
 };
 
 /**
- * Returns true if there is a subscription that is active and is one of the provided product IDs.
+ * Throws an error if billing is enabled and no subscription is found.
  */
-export const subscriptionsContainsActiveProductId = (
-  subscriptions: Subscription[],
-  productId: string[],
-) => {
-  return subscriptions.some(
-    (subscription) =>
-      subscription.status === SubscriptionStatus.ACTIVE && productId.includes(subscription.planId),
-  );
+export const validateIfSubscriptionIsRequired = (subscription?: Subscription | null) => {
+  const isBillingEnabled = IS_BILLING_ENABLED();
+
+  if (!isBillingEnabled) {
+    return;
+  }
+
+  if (isBillingEnabled && !subscription) {
+    throw new AppError(AppErrorCode.NOT_FOUND, {
+      message: 'Subscription not found',
+    });
+  }
+
+  return subscription;
 };

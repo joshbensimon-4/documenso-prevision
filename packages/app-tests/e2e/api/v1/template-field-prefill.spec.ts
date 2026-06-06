@@ -1,43 +1,47 @@
-import { expect, test } from '@playwright/test';
-
 import { NEXT_PUBLIC_WEBAPP_URL } from '@documenso/lib/constants/app';
 import { createApiToken } from '@documenso/lib/server-only/public-api/create-api-token';
 import type { TCheckboxFieldMeta, TRadioFieldMeta } from '@documenso/lib/types/field-meta';
+import {
+  mapDocumentIdToSecondaryId,
+  mapSecondaryIdToDocumentId,
+  mapSecondaryIdToTemplateId,
+} from '@documenso/lib/utils/envelope';
 import { prisma } from '@documenso/prisma';
 import { FieldType, RecipientRole } from '@documenso/prisma/client';
 import { seedBlankTemplate } from '@documenso/prisma/seed/templates';
 import { seedUser } from '@documenso/prisma/seed/users';
+import { expect, test } from '@playwright/test';
 
 import { apiSignin } from '../../fixtures/authentication';
 
 const WEBAPP_BASE_URL = NEXT_PUBLIC_WEBAPP_URL();
 
 test.describe('Template Field Prefill API v1', () => {
-  test('should create a document from template with prefilled fields', async ({
-    page,
-    request,
-  }) => {
+  test('should create a document from template with prefilled fields', async ({ page, request }) => {
     // 1. Create a user
-    const user = await seedUser();
+    const { user, team } = await seedUser();
 
     // 2. Create an API token for the user
     const { token } = await createApiToken({
       userId: user.id,
+      teamId: team.id,
       tokenName: 'test-token',
       expiresIn: null,
     });
 
     // 3. Create a template with seedBlankTemplate
-    const template = await seedBlankTemplate(user, {
+    const template = await seedBlankTemplate(user, team.id, {
       createTemplateOptions: {
         title: 'Template with Advanced Fields',
       },
     });
 
+    const firstEnvelopeItem = template.envelopeItems[0];
+
     // 4. Create a recipient for the template
     const recipient = await prisma.recipient.create({
       data: {
-        templateId: template.id,
+        envelopeId: template.id,
         email: 'recipient@example.com',
         name: 'Test Recipient',
         role: RecipientRole.SIGNER,
@@ -52,7 +56,8 @@ test.describe('Template Field Prefill API v1', () => {
     // Add TEXT field
     const textField = await prisma.field.create({
       data: {
-        templateId: template.id,
+        envelopeId: template.id,
+        envelopeItemId: firstEnvelopeItem.id,
         recipientId: recipient.id,
         type: FieldType.TEXT,
         page: 1,
@@ -72,7 +77,8 @@ test.describe('Template Field Prefill API v1', () => {
     // Add NUMBER field
     const numberField = await prisma.field.create({
       data: {
-        templateId: template.id,
+        envelopeId: template.id,
+        envelopeItemId: firstEnvelopeItem.id,
         recipientId: recipient.id,
         type: FieldType.NUMBER,
         page: 1,
@@ -92,7 +98,8 @@ test.describe('Template Field Prefill API v1', () => {
     // Add RADIO field
     const radioField = await prisma.field.create({
       data: {
-        templateId: template.id,
+        envelopeId: template.id,
+        envelopeItemId: firstEnvelopeItem.id,
         recipientId: recipient.id,
         type: FieldType.RADIO,
         page: 1,
@@ -116,7 +123,8 @@ test.describe('Template Field Prefill API v1', () => {
     // Add CHECKBOX field
     const checkboxField = await prisma.field.create({
       data: {
-        templateId: template.id,
+        envelopeId: template.id,
+        envelopeItemId: firstEnvelopeItem.id,
         recipientId: recipient.id,
         type: FieldType.CHECKBOX,
         page: 1,
@@ -140,7 +148,8 @@ test.describe('Template Field Prefill API v1', () => {
     // Add DROPDOWN field
     const dropdownField = await prisma.field.create({
       data: {
-        templateId: template.id,
+        envelopeId: template.id,
+        envelopeItemId: firstEnvelopeItem.id,
         recipientId: recipient.id,
         type: FieldType.DROPDOWN,
         page: 1,
@@ -158,6 +167,24 @@ test.describe('Template Field Prefill API v1', () => {
       },
     });
 
+    // Add SIGNATURE field (required for distribution)
+    await prisma.field.create({
+      data: {
+        envelopeId: template.id,
+        envelopeItemId: firstEnvelopeItem.id,
+        recipientId: recipient.id,
+        type: FieldType.SIGNATURE,
+        page: 1,
+        positionX: 1,
+        positionY: 1,
+        width: 1,
+        height: 1,
+        customText: '',
+        inserted: false,
+        fieldMeta: { type: 'signature', fontSize: 14 },
+      },
+    });
+
     // 6. Sign in as the user
     await apiSignin({
       page,
@@ -165,11 +192,11 @@ test.describe('Template Field Prefill API v1', () => {
     });
 
     // 7. Navigate to the template
-    await page.goto(`${WEBAPP_BASE_URL}/templates/${template.id}`);
+    await page.goto(`${WEBAPP_BASE_URL}/t/${team.url}/templates/${mapSecondaryIdToTemplateId(template.secondaryId)}`);
 
     // 8. Create a document from the template with prefilled fields
     const response = await request.post(
-      `${WEBAPP_BASE_URL}/api/v1/templates/${template.id}/generate-document`,
+      `${WEBAPP_BASE_URL}/api/v1/templates/${mapSecondaryIdToTemplateId(template.secondaryId)}/generate-document`,
       {
         headers: {
           Authorization: `Bearer ${token}`,
@@ -196,7 +223,7 @@ test.describe('Template Field Prefill API v1', () => {
               id: numberField.id,
               type: 'number',
               label: 'Prefilled Number',
-              value: '42',
+              value: '98765',
             },
             {
               id: radioField.id,
@@ -228,9 +255,9 @@ test.describe('Template Field Prefill API v1', () => {
     expect(responseData.documentId).toBeDefined();
 
     // 9. Verify the document was created with prefilled fields
-    const document = await prisma.document.findUnique({
+    const document = await prisma.envelope.findUnique({
       where: {
-        id: responseData.documentId,
+        secondaryId: mapDocumentIdToSecondaryId(responseData.documentId),
       },
       include: {
         fields: true,
@@ -238,6 +265,10 @@ test.describe('Template Field Prefill API v1', () => {
     });
 
     expect(document).not.toBeNull();
+
+    if (!document) {
+      throw new Error('Document not found');
+    }
 
     // 10. Verify each field has the correct prefilled values
     const documentTextField = document?.fields.find(
@@ -255,7 +286,7 @@ test.describe('Template Field Prefill API v1', () => {
     expect(documentNumberField?.fieldMeta).toMatchObject({
       type: 'number',
       label: 'Prefilled Number',
-      value: '42',
+      value: '98765',
     });
 
     const documentRadioField = document?.fields.find(
@@ -296,14 +327,14 @@ test.describe('Template Field Prefill API v1', () => {
     // 11. Sign in as the recipient and verify the prefilled fields are visible
     const documentRecipient = await prisma.recipient.findFirst({
       where: {
-        documentId: document?.id,
+        envelopeId: document?.id,
         email: 'recipient@example.com',
       },
     });
 
     // Send the document to the recipient
     const sendResponse = await request.post(
-      `${WEBAPP_BASE_URL}/api/v1/documents/${document?.id}/send`,
+      `${WEBAPP_BASE_URL}/api/v1/documents/${mapSecondaryIdToDocumentId(document.secondaryId)}/send`,
       {
         headers: {
           Authorization: `Bearer ${token}`,
@@ -328,7 +359,7 @@ test.describe('Template Field Prefill API v1', () => {
     await expect(page.getByText('This is prefilled')).toBeVisible();
 
     // Number field
-    await expect(page.getByText('42')).toBeVisible();
+    await expect(page.getByText('98765', { exact: true })).toBeVisible();
 
     // Radio field
     await expect(page.getByText('Option A')).toBeVisible();
@@ -344,31 +375,31 @@ test.describe('Template Field Prefill API v1', () => {
     await expect(page.getByText('Select B')).toBeVisible();
   });
 
-  test('should create a document from template without prefilled fields', async ({
-    page,
-    request,
-  }) => {
+  test('should create a document from template without prefilled fields', async ({ page, request }) => {
     // 1. Create a user
-    const user = await seedUser();
+    const { user, team } = await seedUser();
 
     // 2. Create an API token for the user
     const { token } = await createApiToken({
       userId: user.id,
+      teamId: team.id,
       tokenName: 'test-token',
       expiresIn: null,
     });
 
     // 3. Create a template with seedBlankTemplate
-    const template = await seedBlankTemplate(user, {
+    const template = await seedBlankTemplate(user, team.id, {
       createTemplateOptions: {
         title: 'Template with Default Fields',
       },
     });
 
+    const firstEnvelopeItem = template.envelopeItems[0];
+
     // 4. Create a recipient for the template
     const recipient = await prisma.recipient.create({
       data: {
-        templateId: template.id,
+        envelopeId: template.id,
         email: 'recipient@example.com',
         name: 'Test Recipient',
         role: RecipientRole.SIGNER,
@@ -381,9 +412,10 @@ test.describe('Template Field Prefill API v1', () => {
 
     // 5. Add fields to the template
     // Add TEXT field
-    const textField = await prisma.field.create({
+    await prisma.field.create({
       data: {
-        templateId: template.id,
+        envelopeId: template.id,
+        envelopeItemId: firstEnvelopeItem.id,
         recipientId: recipient.id,
         type: FieldType.TEXT,
         page: 1,
@@ -401,9 +433,10 @@ test.describe('Template Field Prefill API v1', () => {
     });
 
     // Add NUMBER field
-    const numberField = await prisma.field.create({
+    await prisma.field.create({
       data: {
-        templateId: template.id,
+        envelopeId: template.id,
+        envelopeItemId: firstEnvelopeItem.id,
         recipientId: recipient.id,
         type: FieldType.NUMBER,
         page: 1,
@@ -420,6 +453,24 @@ test.describe('Template Field Prefill API v1', () => {
       },
     });
 
+    // Add SIGNATURE field (required for distribution)
+    await prisma.field.create({
+      data: {
+        envelopeId: template.id,
+        envelopeItemId: firstEnvelopeItem.id,
+        recipientId: recipient.id,
+        type: FieldType.SIGNATURE,
+        page: 1,
+        positionX: 1,
+        positionY: 1,
+        width: 1,
+        height: 1,
+        customText: '',
+        inserted: false,
+        fieldMeta: { type: 'signature', fontSize: 14 },
+      },
+    });
+
     // 6. Sign in as the user
     await apiSignin({
       page,
@@ -427,11 +478,11 @@ test.describe('Template Field Prefill API v1', () => {
     });
 
     // 7. Navigate to the template
-    await page.goto(`${WEBAPP_BASE_URL}/templates/${template.id}`);
+    await page.goto(`${WEBAPP_BASE_URL}/t/${team.url}/templates/${mapSecondaryIdToTemplateId(template.secondaryId)}`);
 
     // 8. Create a document from the template without prefilled fields
     const response = await request.post(
-      `${WEBAPP_BASE_URL}/api/v1/templates/${template.id}/generate-document`,
+      `${WEBAPP_BASE_URL}/api/v1/templates/${mapSecondaryIdToTemplateId(template.secondaryId)}/generate-document`,
       {
         headers: {
           Authorization: `Bearer ${token}`,
@@ -459,9 +510,9 @@ test.describe('Template Field Prefill API v1', () => {
     expect(responseData.documentId).toBeDefined();
 
     // 9. Verify the document was created with default fields
-    const document = await prisma.document.findUnique({
+    const document = await prisma.envelope.findUnique({
       where: {
-        id: responseData.documentId,
+        secondaryId: mapDocumentIdToSecondaryId(responseData.documentId),
       },
       include: {
         fields: true,
@@ -469,6 +520,10 @@ test.describe('Template Field Prefill API v1', () => {
     });
 
     expect(document).not.toBeNull();
+
+    if (!document) {
+      throw new Error('Document not found');
+    }
 
     // 10. Verify fields have their default values
     const documentTextField = document?.fields.find((field) => field.type === FieldType.TEXT);
@@ -486,7 +541,7 @@ test.describe('Template Field Prefill API v1', () => {
     // 11. Sign in as the recipient and verify the default fields are visible
     const documentRecipient = await prisma.recipient.findFirst({
       where: {
-        documentId: document?.id,
+        envelopeId: document?.id,
         email: 'recipient@example.com',
       },
     });
@@ -494,7 +549,7 @@ test.describe('Template Field Prefill API v1', () => {
     expect(documentRecipient).not.toBeNull();
 
     const sendResponse = await request.post(
-      `${WEBAPP_BASE_URL}/api/v1/documents/${document?.id}/send`,
+      `${WEBAPP_BASE_URL}/api/v1/documents/${mapSecondaryIdToDocumentId(document.secondaryId)}/send`,
       {
         headers: {
           Authorization: `Bearer ${token}`,
@@ -519,27 +574,30 @@ test.describe('Template Field Prefill API v1', () => {
 
   test('should handle invalid field prefill values', async ({ request }) => {
     // 1. Create a user
-    const user = await seedUser();
+    const { user, team } = await seedUser();
 
     // 2. Create an API token for the user
     const { token } = await createApiToken({
       userId: user.id,
+      teamId: team.id,
       tokenName: 'test-token',
       expiresIn: null,
     });
 
     // 3. Create a template using seedBlankTemplate
-    const template = await seedBlankTemplate(user, {
+    const template = await seedBlankTemplate(user, team.id, {
       createTemplateOptions: {
         title: 'Template for Invalid Test',
         visibility: 'EVERYONE',
       },
     });
 
+    const firstEnvelopeItem = template.envelopeItems[0];
+
     // 4. Create a recipient for the template
     const recipient = await prisma.recipient.create({
       data: {
-        templateId: template.id,
+        envelopeId: template.id,
         email: 'recipient@example.com',
         name: 'Test Recipient',
         role: RecipientRole.SIGNER,
@@ -553,7 +611,8 @@ test.describe('Template Field Prefill API v1', () => {
     // 5. Add a field to the template
     const field = await prisma.field.create({
       data: {
-        templateId: template.id,
+        envelopeId: template.id,
+        envelopeItemId: firstEnvelopeItem.id,
         recipientId: recipient.id,
         type: FieldType.RADIO,
         page: 1,
@@ -576,7 +635,7 @@ test.describe('Template Field Prefill API v1', () => {
 
     // 6. Try to create a document with invalid prefill value
     const response = await request.post(
-      `${WEBAPP_BASE_URL}/api/v1/templates/${template.id}/generate-document`,
+      `${WEBAPP_BASE_URL}/api/v1/templates/${mapSecondaryIdToTemplateId(template.secondaryId)}/generate-document`,
       {
         headers: {
           Authorization: `Bearer ${token}`,

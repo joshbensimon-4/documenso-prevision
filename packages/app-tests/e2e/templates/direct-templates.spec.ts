@@ -1,39 +1,69 @@
-import { expect, test } from '@playwright/test';
-import { customAlphabet } from 'nanoid';
-
 import { NEXT_PUBLIC_WEBAPP_URL } from '@documenso/lib/constants/app';
-import {
-  DIRECT_TEMPLATE_RECIPIENT_EMAIL,
-  DIRECT_TEMPLATE_RECIPIENT_NAME,
-} from '@documenso/lib/constants/direct-templates';
+import { FIELD_SIGNATURE_META_DEFAULT_VALUES } from '@documenso/lib/types/field-meta';
 import { createDocumentAuthOptions } from '@documenso/lib/utils/document-auth';
+import { mapSecondaryIdToTemplateId } from '@documenso/lib/utils/envelope';
 import { formatDirectTemplatePath } from '@documenso/lib/utils/templates';
+import { prisma } from '@documenso/prisma';
 import { seedTeam } from '@documenso/prisma/seed/teams';
 import { seedDirectTemplate, seedTemplate } from '@documenso/prisma/seed/templates';
 import { seedTestEmail, seedUser } from '@documenso/prisma/seed/users';
+import { expect, test } from '@playwright/test';
+import { DocumentSigningOrder, FieldType, RecipientRole } from '@prisma/client';
+import { customAlphabet } from 'nanoid';
 
 import { apiSignin } from '../fixtures/authentication';
-import { checkDocumentTabCount } from '../fixtures/documents';
+import { signSignaturePad } from '../fixtures/signature';
 
 // Duped from `packages/lib/utils/teams.ts` due to errors when importing that file.
-const formatDocumentsPath = (teamUrl?: string) =>
-  teamUrl ? `/t/${teamUrl}/documents` : '/documents';
-const formatTemplatesPath = (teamUrl?: string) =>
-  teamUrl ? `/t/${teamUrl}/templates` : '/templates';
+const formatDocumentsPath = (teamUrl: string) => `/t/${teamUrl}/documents`;
+const formatTemplatesPath = (teamUrl: string) => `/t/${teamUrl}/templates`;
 
 const nanoid = customAlphabet('1234567890abcdef', 10);
 
-test('[DIRECT_TEMPLATES]: create direct link for template', async ({ page }) => {
-  const team = await seedTeam({
-    createTeamMembers: 1,
+const expectSigningRequestJobForRecipient = async (recipientId: number) => {
+  const job = await prisma.backgroundJob.findFirst({
+    where: {
+      jobId: 'send.signing.requested.email',
+      payload: {
+        path: ['recipientId'],
+        equals: recipientId,
+      },
+    },
   });
 
-  const owner = team.owner;
+  expect(job).not.toBeNull();
+};
 
-  // Should only be visible to the owner in personal templates.
-  const personalTemplate = await seedTemplate({
-    title: 'Personal template',
-    userId: owner.id,
+const seedSignatureFieldForRecipient = async (options: {
+  envelopeId: string;
+  recipientId: number;
+  positionY: number;
+}) => {
+  const envelopeItem = await prisma.envelopeItem.findFirstOrThrow({
+    where: { envelopeId: options.envelopeId },
+  });
+
+  return await prisma.field.create({
+    data: {
+      envelopeId: options.envelopeId,
+      envelopeItemId: envelopeItem.id,
+      recipientId: options.recipientId,
+      type: FieldType.SIGNATURE,
+      page: 1,
+      positionX: 5,
+      positionY: options.positionY,
+      width: 20,
+      height: 5,
+      customText: '',
+      inserted: false,
+      fieldMeta: FIELD_SIGNATURE_META_DEFAULT_VALUES,
+    },
+  });
+};
+
+test('[DIRECT_TEMPLATES]: create direct link for template', async ({ page }) => {
+  const { team, owner, organisation } = await seedTeam({
+    createTeamMembers: 1,
   });
 
   // Should be visible to team members.
@@ -46,49 +76,35 @@ test('[DIRECT_TEMPLATES]: create direct link for template', async ({ page }) => 
   await apiSignin({
     page,
     email: owner.email,
-    redirectPath: '/templates',
+    redirectPath: `/t/${team.url}/templates`,
   });
 
-  const urls = [
-    `${NEXT_PUBLIC_WEBAPP_URL()}/t/${team.url}/templates/${teamTemplate.id}`,
-    `${NEXT_PUBLIC_WEBAPP_URL()}/templates/${personalTemplate.id}`,
-  ];
+  const url = `${NEXT_PUBLIC_WEBAPP_URL()}/t/${team.url}/templates/${teamTemplate.id}`;
 
-  // Run test for personal and team templates.
-  for (const url of urls) {
-    // Owner should see list of templates with no direct link badge.
-    await page.goto(url);
-    await expect(page.getByRole('button', { name: 'direct link' })).toHaveCount(1);
+  // Owner should see list of templates with no direct link badge.
+  await page.goto(url);
+  await expect(page.getByRole('button', { name: 'direct link' })).toHaveCount(1);
 
-    // Create direct link.
-    await page.getByRole('button', { name: 'Create Direct Link' }).click();
-    await page.getByRole('button', { name: 'Enable direct link signing' }).click();
-    await page.getByRole('button', { name: 'Create one automatically' }).click();
-    await expect(page.getByRole('heading', { name: 'Direct Link Signing' })).toBeVisible();
+  // Create direct link.
+  await page.getByRole('button', { name: 'Create Direct Link' }).click();
+  await page.getByRole('button', { name: 'Enable direct link signing' }).click();
+  await page.getByRole('button', { name: 'Create one automatically' }).click();
+  await expect(page.getByRole('heading', { name: 'Direct Link Signing' })).toBeVisible();
 
-    await page.waitForTimeout(1000);
-    await page.getByTestId('btn-dialog-close').click();
+  await page.waitForTimeout(1000);
+  await page.getByTestId('btn-dialog-close').click();
 
-    // Expect badge to appear.
-    await expect(page.getByRole('button', { name: 'direct link' })).toHaveCount(2);
-  }
+  // Expect badge to appear.
+  await expect(page.getByRole('button', { name: 'direct link' })).toHaveCount(2);
 });
 
 test('[DIRECT_TEMPLATES]: toggle direct template link', async ({ page }) => {
-  const team = await seedTeam({
+  const { team, owner, organisation } = await seedTeam({
     createTeamMembers: 1,
   });
 
-  const owner = team.owner;
-
-  // Should only be visible to the owner in personal templates.
-  const personalDirectTemplate = await seedDirectTemplate({
-    title: 'Personal direct template link',
-    userId: owner.id,
-  });
-
   // Should be visible to team members.
-  const teamDirectTemplate = await seedDirectTemplate({
+  const template = await seedDirectTemplate({
     title: 'Team direct template link 1',
     userId: owner.id,
     teamId: team.id,
@@ -99,41 +115,30 @@ test('[DIRECT_TEMPLATES]: toggle direct template link', async ({ page }) => {
     email: owner.email,
   });
 
-  // Run test for personal and team templates.
-  for (const template of [personalDirectTemplate, teamDirectTemplate]) {
-    // Check that the direct template link is accessible.
-    await page.goto(formatDirectTemplatePath(template.directLink?.token || ''));
-    await expect(page.getByRole('heading', { name: 'General' })).toBeVisible();
+  // Check that the direct template link is accessible.
+  await page.goto(formatDirectTemplatePath(template.directLink?.token || ''));
+  await expect(page.getByRole('heading', { name: 'General' })).toBeVisible();
 
-    // Navigate to template settings and disable access.
-    await page.goto(`${NEXT_PUBLIC_WEBAPP_URL()}${formatTemplatesPath(template.team?.url)}`);
-    await page.getByRole('cell', { name: 'Use Template' }).getByRole('button').nth(1).click();
-    await page.getByRole('menuitem', { name: 'Direct link' }).click();
-    await page.getByRole('switch').click();
-    await page.getByRole('button', { name: 'Save' }).click();
-    await expect(page.getByText('Direct link signing has been').first()).toBeVisible();
+  // Navigate to template settings and disable access.
+  await page.goto(`${NEXT_PUBLIC_WEBAPP_URL()}${formatTemplatesPath(template.team?.url)}`);
+  await page.getByRole('cell', { name: 'Use Template' }).getByRole('button').nth(1).click();
+  await page.getByTestId('template-direct-link').click();
+  await page.getByRole('switch').click();
+  await page.getByRole('button', { name: 'Save' }).click();
+  await expect(page.getByText('Direct link signing has been').first()).toBeVisible();
 
-    // Check that the direct template link is no longer accessible.
-    await page.goto(formatDirectTemplatePath(template.directLink?.token || ''));
-    await expect(page.getByText('404 not found')).toBeVisible();
-  }
+  // Check that the direct template link is no longer accessible.
+  await page.goto(formatDirectTemplatePath(template.directLink?.token || '123'));
+  await expect(page.getByText('404 not found')).toBeVisible();
 });
 
 test('[DIRECT_TEMPLATES]: delete direct template link', async ({ page }) => {
-  const team = await seedTeam({
+  const { team, owner, organisation } = await seedTeam({
     createTeamMembers: 1,
   });
 
-  const owner = team.owner;
-
-  // Should only be visible to the owner in personal templates.
-  const personalDirectTemplate = await seedDirectTemplate({
-    title: 'Personal direct template link',
-    userId: owner.id,
-  });
-
   // Should be visible to team members.
-  const teamDirectTemplate = await seedDirectTemplate({
+  const template = await seedDirectTemplate({
     title: 'Team direct template link 1',
     userId: owner.id,
     teamId: team.id,
@@ -144,43 +149,39 @@ test('[DIRECT_TEMPLATES]: delete direct template link', async ({ page }) => {
     email: owner.email,
   });
 
-  // Run test for personal and team templates.
-  for (const template of [personalDirectTemplate, teamDirectTemplate]) {
-    // Check that the direct template link is accessible.
-    await page.goto(formatDirectTemplatePath(template.directLink?.token || ''));
-    await expect(page.getByRole('heading', { name: 'General' })).toBeVisible();
+  // Check that the direct template link is accessible.
+  await page.goto(formatDirectTemplatePath(template.directLink?.token || ''));
+  await expect(page.getByRole('heading', { name: 'General' })).toBeVisible();
 
-    // Navigate to template settings and delete the access.
-    await page.goto(`${NEXT_PUBLIC_WEBAPP_URL()}${formatTemplatesPath(template.team?.url)}`);
-    await page.getByRole('cell', { name: 'Use Template' }).getByRole('button').nth(1).click();
-    await page.getByRole('menuitem', { name: 'Direct link' }).click();
-    await page.getByRole('button', { name: 'Remove' }).click();
-    await page.getByRole('button', { name: 'Confirm' }).click();
-    await expect(page.getByText('Direct template link deleted').first()).toBeVisible();
+  // Navigate to template settings and delete the access.
+  await page.goto(`${NEXT_PUBLIC_WEBAPP_URL()}${formatTemplatesPath(template.team?.url)}`);
+  await page.getByRole('cell', { name: 'Use Template' }).getByRole('button').nth(1).click();
+  await page.getByTestId('template-direct-link').click();
+  await page.getByRole('button', { name: 'Remove' }).click();
+  await page.getByRole('button', { name: 'Confirm' }).click();
+  await expect(page.getByText('Direct template link deleted').first()).toBeVisible();
 
-    // Check that the direct template link is no longer accessible.
-    await page.goto(formatDirectTemplatePath(template.directLink?.token || ''));
-    await expect(page.getByText('404 not found')).toBeVisible();
-  }
+  // Check that the direct template link is no longer accessible.
+  await page.goto(formatDirectTemplatePath(template.directLink?.token || ''));
+  await expect(page.getByText('404 not found')).toBeVisible();
 });
 
-test('[DIRECT_TEMPLATES]: direct template link auth access', async ({ page }) => {
-  const user = await seedUser();
+test('[DIRECT_TEMPLATES]: V1 direct template link auth access', async ({ page }) => {
+  const { user, team } = await seedUser();
 
   const directTemplateWithAuth = await seedDirectTemplate({
     title: 'Personal direct template link',
     userId: user.id,
+    teamId: team.id,
     createTemplateOptions: {
       authOptions: createDocumentAuthOptions({
-        globalAccessAuth: 'ACCOUNT',
-        globalActionAuth: null,
+        globalAccessAuth: ['ACCOUNT'],
+        globalActionAuth: [],
       }),
     },
   });
 
-  const directTemplatePath = formatDirectTemplatePath(
-    directTemplateWithAuth.directLink?.token || '',
-  );
+  const directTemplatePath = formatDirectTemplatePath(directTemplateWithAuth.directLink?.token || '');
 
   await page.goto(directTemplatePath);
 
@@ -195,139 +196,328 @@ test('[DIRECT_TEMPLATES]: direct template link auth access', async ({ page }) =>
 
   await expect(page.getByRole('heading', { name: 'General' })).toBeVisible();
   await expect(page.getByLabel('Email')).toBeDisabled();
+
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await page.getByRole('button', { name: 'Complete' }).click();
+
+  await page.getByRole('button', { name: 'Sign' }).click();
+  await page.waitForURL(/\/sign/);
+  await expect(page.getByRole('heading', { name: 'Document Signed' })).toBeVisible();
+});
+
+test('[DIRECT_TEMPLATES]: V2 direct template link auth access', async ({ page }) => {
+  const { user, team } = await seedUser();
+
+  const directTemplateWithAuth = await seedDirectTemplate({
+    title: 'Personal direct template link',
+    userId: user.id,
+    teamId: team.id,
+    internalVersion: 2,
+    createTemplateOptions: {
+      authOptions: createDocumentAuthOptions({
+        globalAccessAuth: ['ACCOUNT'],
+        globalActionAuth: [],
+      }),
+    },
+  });
+
+  const directTemplatePath = formatDirectTemplatePath(directTemplateWithAuth.directLink?.token || '');
+
+  await page.goto(directTemplatePath);
+
+  await expect(page.getByText('Authentication required')).toBeVisible();
+
+  await apiSignin({
+    page,
+    email: user.email,
+  });
+
+  await page.goto(directTemplatePath);
+
+  await expect(page.getByRole('heading', { name: 'Personal direct template link' })).toBeVisible();
+  await page.getByRole('button', { name: 'Complete' }).click();
+  await expect(page.getByLabel('Your Email')).not.toBeVisible();
+
+  await page.getByRole('button', { name: 'Sign' }).click();
+  await page.waitForURL(/\/sign/);
+  await expect(page.getByRole('heading', { name: 'Document Signed' })).toBeVisible();
 });
 
 test('[DIRECT_TEMPLATES]: use direct template link with 1 recipient', async ({ page }) => {
-  const team = await seedTeam({
+  const { team, owner, organisation } = await seedTeam({
     createTeamMembers: 1,
   });
 
-  const owner = team.owner;
-
-  // Should only be visible to the owner in personal templates.
-  const personalDirectTemplate = await seedDirectTemplate({
-    title: 'Personal direct template link',
-    userId: owner.id,
-  });
-
   // Should be visible to team members.
-  const teamDirectTemplate = await seedDirectTemplate({
+  const template = await seedDirectTemplate({
     title: 'Team direct template link 1',
     userId: owner.id,
     teamId: team.id,
   });
 
-  // Run test for personal and team templates.
-  for (const template of [personalDirectTemplate, teamDirectTemplate]) {
-    // Check that the direct template link is accessible.
-    await page.goto(formatDirectTemplatePath(template.directLink?.token || ''));
-    await expect(page.getByRole('heading', { name: 'General' })).toBeVisible();
+  // Check that the direct template link is accessible.
+  await page.goto(formatDirectTemplatePath(template.directLink?.token || ''));
+  await expect(page.getByRole('heading', { name: 'General' })).toBeVisible();
 
-    await page.getByPlaceholder('recipient@documenso.com').fill(seedTestEmail());
+  await page.waitForTimeout(100);
+  await page.getByPlaceholder('recipient@documenso.com').fill(seedTestEmail());
 
-    await page.getByRole('button', { name: 'Continue' }).click();
-    await page.getByRole('button', { name: 'Complete' }).click();
-    await page.getByRole('button', { name: 'Sign' }).click();
-    await page.waitForURL(/\/sign/);
-    await expect(page.getByRole('heading', { name: 'Document Signed' })).toBeVisible();
-  }
+  await page.getByRole('button', { name: 'Continue' }).click();
 
-  await apiSignin({
-    page,
-    email: owner.email,
-  });
+  await expect(page.getByText('Next Recipient Name')).not.toBeVisible();
 
-  // Check that the owner has the documents.
-  for (const template of [personalDirectTemplate, teamDirectTemplate]) {
-    await page.goto(`${NEXT_PUBLIC_WEBAPP_URL()}${formatDocumentsPath(template.team?.url)}`);
+  await page.getByRole('button', { name: 'Complete' }).click();
+  await page.getByRole('button', { name: 'Sign' }).click();
+  await page.waitForURL(/\/sign/);
+  await expect(page.getByRole('heading', { name: 'Document Signed' })).toBeVisible();
 
-    await expect(async () => {
-      // Check that the document is in the 'All' tab.
-      await checkDocumentTabCount(page, 'Completed', 1);
-    }).toPass();
-  }
+  // Add a longer waiting period to ensure document status is updated
+  await page.waitForTimeout(3000);
 });
 
-test('[DIRECT_TEMPLATES]: use direct template link with 2 recipients', async ({ page }) => {
-  const team = await seedTeam({
+test('[DIRECT_TEMPLATES]: V1 use direct template link with 2 recipients with next signer dictation', async ({
+  page,
+}) => {
+  const { team, owner, organisation } = await seedTeam({
     createTeamMembers: 1,
   });
 
-  const owner = team.owner;
-
-  const secondRecipient = await seedUser();
-
-  const createTemplateOptions = {
-    recipients: {
-      createMany: {
-        data: [
-          {
-            email: DIRECT_TEMPLATE_RECIPIENT_EMAIL,
-            name: DIRECT_TEMPLATE_RECIPIENT_NAME,
-            token: nanoid(),
-          },
-          {
-            email: secondRecipient.email,
-            token: nanoid(),
-          },
-        ],
-      },
-    },
-  };
-
-  // Should only be visible to the owner in personal templates.
-  const personalDirectTemplate = await seedDirectTemplate({
-    title: 'Personal direct template link',
-    userId: owner.id,
-    createTemplateOptions,
-  });
-
   // Should be visible to team members.
-  const teamDirectTemplate = await seedDirectTemplate({
+  const template = await seedDirectTemplate({
     title: 'Team direct template link 1',
     userId: owner.id,
     teamId: team.id,
-    createTemplateOptions,
   });
 
-  // Run test for personal and team templates.
-  for (const template of [personalDirectTemplate, teamDirectTemplate]) {
-    // Check that the direct template link is accessible.
-    await page.goto(formatDirectTemplatePath(template.directLink?.token || ''));
-    await expect(page.getByRole('heading', { name: 'General' })).toBeVisible();
+  await prisma.documentMeta.update({
+    where: {
+      id: template.documentMetaId,
+    },
+    data: {
+      allowDictateNextSigner: true,
+      signingOrder: DocumentSigningOrder.SEQUENTIAL,
+    },
+  });
 
-    await page.waitForTimeout(1000);
-    await page.getByPlaceholder('recipient@documenso.com').fill(seedTestEmail());
+  const directTemplateRecipient = template.recipients[0];
 
-    await page.getByRole('button', { name: 'Continue' }).click();
-    await page.getByRole('button', { name: 'Complete' }).click();
-    await page.getByRole('button', { name: 'Sign' }).click();
-    await page.waitForURL(/\/sign/);
-    await expect(page.getByText('Waiting for others to sign')).toBeVisible();
+  if (!directTemplateRecipient) {
+    throw new Error('Expected direct template recipient to exist');
   }
 
-  await apiSignin({
-    page,
-    email: owner.email,
+  // All SIGNER recipients need a signature field for sendDocument to dispatch emails.
+  const directSignatureField = await seedSignatureFieldForRecipient({
+    envelopeId: template.id,
+    recipientId: directTemplateRecipient.id,
+    positionY: 10,
   });
 
-  // Check that the owner has the documents.
-  for (const template of [personalDirectTemplate, teamDirectTemplate]) {
-    await page.goto(`${NEXT_PUBLIC_WEBAPP_URL()}${formatDocumentsPath(template.team?.url)}`);
+  const originalName = 'Signer 2';
+  const originalSecondSignerEmail = seedTestEmail();
 
-    // Check that the document is in the 'All' tab.
-    await checkDocumentTabCount(page, 'All', 1);
-    await checkDocumentTabCount(page, 'Pending', 1);
+  // Add another signer
+  const secondRecipient = await prisma.recipient.create({
+    data: {
+      signingOrder: 2,
+      envelopeId: template.id,
+      email: originalSecondSignerEmail,
+      name: originalName,
+      token: Math.random().toString().slice(2, 7),
+      role: RecipientRole.SIGNER,
+    },
+  });
+
+  await seedSignatureFieldForRecipient({
+    envelopeId: template.id,
+    recipientId: secondRecipient.id,
+    positionY: 20,
+  });
+
+  // Check that the direct template link is accessible.
+  await page.goto(formatDirectTemplatePath(template.directLink?.token || ''));
+  await expect(page.getByRole('heading', { name: 'General' })).toBeVisible();
+
+  await page.waitForTimeout(100);
+  await page.getByPlaceholder('recipient@documenso.com').fill(seedTestEmail());
+
+  await page.getByRole('button', { name: 'Continue' }).click();
+
+  // Sign the direct template recipient's signature field via the UI.
+  await signSignaturePad(page);
+  await page.locator(`#field-${directSignatureField.id}`).getByRole('button').click();
+  await expect(page.locator(`#field-${directSignatureField.id}`)).toHaveAttribute('data-inserted', 'true');
+
+  await page.getByRole('button', { name: 'Complete' }).click();
+
+  await expect(page.getByText('Next Recipient Name')).toBeVisible();
+
+  const nextRecipientNameInputValue = await page.getByLabel('Next Recipient Name').inputValue();
+  expect(nextRecipientNameInputValue).toBe(originalName);
+
+  const nextRecipientEmailInputValue = await page.getByLabel('Next Recipient Email').inputValue();
+  expect(nextRecipientEmailInputValue).toBe(originalSecondSignerEmail);
+
+  const newName = 'Hello';
+  const newSecondSignerEmail = seedTestEmail();
+
+  await page.getByLabel('Next Recipient Email').fill(newSecondSignerEmail);
+  await page.getByLabel('Next Recipient Name').fill(newName);
+
+  await page.getByRole('button', { name: 'Sign' }).click();
+  await page.waitForURL(/\/sign/);
+  await expect(page.getByRole('heading', { name: 'Document Signed' })).toBeVisible();
+
+  const createdEnvelopeRecipients = await prisma.recipient.findMany({
+    where: {
+      envelope: {
+        templateId: mapSecondaryIdToTemplateId(template.secondaryId),
+      },
+    },
+  });
+
+  const updatedSecondRecipient = createdEnvelopeRecipients.find((recipient) => recipient.signingOrder === 2);
+
+  expect(updatedSecondRecipient).toBeDefined();
+
+  if (!updatedSecondRecipient) {
+    throw new Error('Expected second recipient to exist');
   }
 
-  // Check that the second recipient has the 2 pending documents.
-  await apiSignin({
-    page,
-    email: secondRecipient.email,
+  expect(updatedSecondRecipient.name).toBe(newName);
+  expect(updatedSecondRecipient.email).toBe(newSecondSignerEmail);
+  await expectSigningRequestJobForRecipient(updatedSecondRecipient.id);
+});
+
+test('[DIRECT_TEMPLATES]: V2 use direct template link with 2 recipients with next signer dictation', async ({
+  page,
+}) => {
+  const { team, owner, organisation } = await seedTeam({
+    createTeamMembers: 1,
   });
 
-  await page.goto('/documents');
+  // Should be visible to team members.
+  const template = await seedDirectTemplate({
+    title: 'Team direct template link 1',
+    userId: owner.id,
+    teamId: team.id,
+    internalVersion: 2,
+  });
 
-  await checkDocumentTabCount(page, 'All', 2);
-  await checkDocumentTabCount(page, 'Inbox', 2);
+  await prisma.documentMeta.update({
+    where: {
+      id: template.documentMetaId,
+    },
+    data: {
+      allowDictateNextSigner: true,
+      signingOrder: DocumentSigningOrder.SEQUENTIAL,
+    },
+  });
+
+  const directTemplateRecipient = template.recipients[0];
+
+  if (!directTemplateRecipient) {
+    throw new Error('Expected direct template recipient to exist');
+  }
+
+  // All SIGNER recipients need a signature field for sendDocument to dispatch emails.
+  const directSignatureField = await seedSignatureFieldForRecipient({
+    envelopeId: template.id,
+    recipientId: directTemplateRecipient.id,
+    positionY: 10,
+  });
+
+  const originalName = 'Signer 2';
+  const originalSecondSignerEmail = seedTestEmail();
+
+  // Add another signer
+  const secondRecipient = await prisma.recipient.create({
+    data: {
+      signingOrder: 2,
+      envelopeId: template.id,
+      email: originalSecondSignerEmail,
+      name: originalName,
+      token: Math.random().toString().slice(2, 7),
+      role: RecipientRole.SIGNER,
+    },
+  });
+
+  await seedSignatureFieldForRecipient({
+    envelopeId: template.id,
+    recipientId: secondRecipient.id,
+    positionY: 20,
+  });
+
+  // Check that the direct template link is accessible.
+  await page.goto(formatDirectTemplatePath(template.directLink?.token || ''));
+  await expect(page.getByRole('heading', { name: 'Team direct template link 1' })).toBeVisible();
+
+  // Wait for the PDF and the Konva canvas overlay to be ready.
+  await expect(page.locator('img[data-page-number]').first()).toBeVisible({ timeout: 30_000 });
+  const canvas = page.locator('.konva-container canvas').first();
+  await expect(canvas).toBeVisible({ timeout: 30_000 });
+
+  // Sign the direct template recipient's signature field via the canvas-based V2 UI.
+  await signSignaturePad(page);
+
+  const canvasBox = await canvas.boundingBox();
+
+  if (!canvasBox) {
+    throw new Error('Canvas bounding box not found');
+  }
+
+  const x =
+    (Number(directSignatureField.positionX) / 100) * canvasBox.width +
+    ((Number(directSignatureField.width) / 100) * canvasBox.width) / 2;
+  const y =
+    (Number(directSignatureField.positionY) / 100) * canvasBox.height +
+    ((Number(directSignatureField.height) / 100) * canvasBox.height) / 2;
+
+  await canvas.click({ position: { x, y } });
+  await expect(page.getByText('0 Fields Remaining').first()).toBeVisible({ timeout: 10_000 });
+
+  await page.getByRole('button', { name: 'Complete' }).click();
+
+  const currentName = 'John Doe';
+  const currentEmail = seedTestEmail();
+
+  await page.getByPlaceholder('Enter Your Name').fill(currentName);
+  await page.getByPlaceholder('Enter Your Email').fill(currentEmail);
+
+  await expect(page.getByText('Next Recipient Name')).toBeVisible();
+
+  const nextRecipientNameInputValue = await page.getByLabel('Next Recipient Name').inputValue();
+  expect(nextRecipientNameInputValue).toBe(originalName);
+
+  const nextRecipientEmailInputValue = await page.getByLabel('Next Recipient Email').inputValue();
+  expect(nextRecipientEmailInputValue).toBe(originalSecondSignerEmail);
+
+  const newName = 'Hello';
+  const newSecondSignerEmail = seedTestEmail();
+
+  await page.getByLabel('Next Recipient Email').fill(newSecondSignerEmail);
+  await page.getByLabel('Next Recipient Name').fill(newName);
+
+  await page.getByRole('button', { name: 'Sign' }).click();
+  await page.waitForURL(/\/sign/);
+  await expect(page.getByRole('heading', { name: 'Document Signed' })).toBeVisible();
+
+  const createdEnvelopeRecipients = await prisma.recipient.findMany({
+    where: {
+      envelope: {
+        templateId: mapSecondaryIdToTemplateId(template.secondaryId),
+      },
+    },
+  });
+
+  const updatedSecondRecipient = createdEnvelopeRecipients.find((recipient) => recipient.signingOrder === 2);
+
+  expect(updatedSecondRecipient).toBeDefined();
+
+  if (!updatedSecondRecipient) {
+    throw new Error('Expected second recipient to exist');
+  }
+
+  expect(updatedSecondRecipient.name).toBe(newName);
+  expect(updatedSecondRecipient.email).toBe(newSecondSignerEmail);
+  await expectSigningRequestJobForRecipient(updatedSecondRecipient.id);
 });

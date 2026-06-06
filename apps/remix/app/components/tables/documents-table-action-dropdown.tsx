@@ -1,30 +1,10 @@
-import { useState } from 'react';
-
-import { msg } from '@lingui/core/macro';
-import { useLingui } from '@lingui/react';
-import { Trans } from '@lingui/react/macro';
-import { DocumentStatus, RecipientRole } from '@prisma/client';
-import {
-  CheckCircle,
-  Copy,
-  Download,
-  Edit,
-  EyeIcon,
-  Loader,
-  MoreHorizontal,
-  MoveRight,
-  Pencil,
-  Share,
-  Trash2,
-} from 'lucide-react';
-import { Link } from 'react-router';
-
-import { downloadPDF } from '@documenso/lib/client-only/download-pdf';
 import { useSession } from '@documenso/lib/client-only/providers/session';
 import type { TDocumentMany as TDocumentRow } from '@documenso/lib/types/document';
 import { isDocumentCompleted } from '@documenso/lib/utils/document';
+import { getEnvelopeItemPermissions } from '@documenso/lib/utils/envelope';
+import { findRecipientByEmail } from '@documenso/lib/utils/recipients';
 import { formatDocumentsPath } from '@documenso/lib/utils/teams';
-import { trpc as trpcClient } from '@documenso/trpc/client';
+import { trpc as trpcReact } from '@documenso/trpc/react';
 import { DocumentShareButton } from '@documenso/ui/components/document/document-share-button';
 import {
   DropdownMenu,
@@ -33,35 +13,57 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from '@documenso/ui/primitives/dropdown-menu';
-import { useToast } from '@documenso/ui/primitives/use-toast';
+import { msg } from '@lingui/core/macro';
+import { useLingui } from '@lingui/react';
+import { Trans } from '@lingui/react/macro';
+import { DocumentStatus, EnvelopeType, RecipientRole } from '@prisma/client';
+import {
+  CheckCircle,
+  Copy,
+  Download,
+  Edit,
+  EyeIcon,
+  FileOutputIcon,
+  FolderInput,
+  Loader,
+  MoreHorizontal,
+  Pencil,
+  Share,
+  Trash2,
+} from 'lucide-react';
+import { useState } from 'react';
+import { Link } from 'react-router';
 
-import { DocumentDeleteDialog } from '~/components/dialogs/document-delete-dialog';
-import { DocumentDuplicateDialog } from '~/components/dialogs/document-duplicate-dialog';
-import { DocumentMoveDialog } from '~/components/dialogs/document-move-dialog';
 import { DocumentResendDialog } from '~/components/dialogs/document-resend-dialog';
+import { EnvelopeDeleteDialog } from '~/components/dialogs/envelope-delete-dialog';
+import { EnvelopeDuplicateDialog } from '~/components/dialogs/envelope-duplicate-dialog';
+import { EnvelopeSaveAsTemplateDialog } from '~/components/dialogs/envelope-save-as-template-dialog';
 import { DocumentRecipientLinkCopyDialog } from '~/components/general/document/document-recipient-link-copy-dialog';
-import { useOptionalCurrentTeam } from '~/providers/team';
+import { useCurrentTeam } from '~/providers/team';
+
+import { EnvelopeDownloadDialog } from '../dialogs/envelope-download-dialog';
+import { EnvelopeRenameDialog } from '../dialogs/envelope-rename-dialog';
 
 export type DocumentsTableActionDropdownProps = {
   row: TDocumentRow;
   onMoveDocument?: () => void;
 };
 
-export const DocumentsTableActionDropdown = ({
-  row,
-  onMoveDocument,
-}: DocumentsTableActionDropdownProps) => {
+export const DocumentsTableActionDropdown = ({ row, onMoveDocument }: DocumentsTableActionDropdownProps) => {
   const { user } = useSession();
-  const team = useOptionalCurrentTeam();
+  const team = useCurrentTeam();
 
-  const { toast } = useToast();
   const { _ } = useLingui();
+  const trpcUtils = trpcReact.useUtils();
 
-  const [isDeleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [isDuplicateDialogOpen, setDuplicateDialogOpen] = useState(false);
-  const [isMoveDialogOpen, setMoveDialogOpen] = useState(false);
+  const [isRenameDialogOpen, setRenameDialogOpen] = useState(false);
+  const [isSaveAsTemplateDialogOpen, setSaveAsTemplateDialogOpen] = useState(false);
 
-  const recipient = row.recipients.find((recipient) => recipient.email === user.email);
+  const recipient = findRecipientByEmail({
+    recipients: row.recipients,
+    userEmail: user.email,
+    teamEmail: team.teamEmail?.email,
+  });
 
   const isOwner = row.user.id === user.id;
   // const isRecipient = !!recipient;
@@ -72,69 +74,25 @@ export const DocumentsTableActionDropdown = ({
   const isCurrentTeamDocument = team && row.team?.url === team.url;
   const canManageDocument = Boolean(isOwner || isCurrentTeamDocument);
 
-  const documentsPath = formatDocumentsPath(team?.url);
-  const formatPath = row.folderId
-    ? `${documentsPath}/f/${row.folderId}/${row.id}/edit`
-    : `${documentsPath}/${row.id}/edit`;
+  const { canTitleBeChanged } = getEnvelopeItemPermissions(
+    {
+      completedAt: row.completedAt,
+      deletedAt: row.deletedAt,
+      type: EnvelopeType.DOCUMENT,
+      status: row.status,
+    },
+    [],
+  );
 
-  const onDownloadClick = async () => {
-    try {
-      const document = !recipient
-        ? await trpcClient.document.getDocumentById.query({
-            documentId: row.id,
-          })
-        : await trpcClient.document.getDocumentByToken.query({
-            token: recipient.token,
-          });
-
-      const documentData = document?.documentData;
-
-      if (!documentData) {
-        return;
-      }
-
-      await downloadPDF({ documentData, fileName: row.title });
-    } catch (err) {
-      toast({
-        title: _(msg`Something went wrong`),
-        description: _(msg`An error occurred while downloading your document.`),
-        variant: 'destructive',
-      });
-    }
-  };
-
-  const onDownloadOriginalClick = async () => {
-    try {
-      const document = !recipient
-        ? await trpcClient.document.getDocumentById.query({
-            documentId: row.id,
-          })
-        : await trpcClient.document.getDocumentByToken.query({
-            token: recipient.token,
-          });
-
-      const documentData = document?.documentData;
-
-      if (!documentData) {
-        return;
-      }
-
-      await downloadPDF({ documentData, fileName: row.title, version: 'original' });
-    } catch (err) {
-      toast({
-        title: _(msg`Something went wrong`),
-        description: _(msg`An error occurred while downloading your document.`),
-        variant: 'destructive',
-      });
-    }
-  };
+  const documentsPath = formatDocumentsPath(team.url);
+  const formatPath = `${documentsPath}/${row.envelopeId}/edit`;
 
   const nonSignedRecipients = row.recipients.filter((item) => item.signingStatus !== 'SIGNED');
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger data-testid="document-table-action-btn">
-        <MoreHorizontal className="text-muted-foreground h-5 w-5" />
+        <MoreHorizontal className="h-5 w-5 text-muted-foreground" />
       </DropdownMenuTrigger>
 
       <DropdownMenuContent className="w-52" align="start" forceMount>
@@ -142,32 +100,35 @@ export const DocumentsTableActionDropdown = ({
           <Trans>Action</Trans>
         </DropdownMenuLabel>
 
-        {!isDraft && recipient && recipient?.role !== RecipientRole.CC && (
-          <DropdownMenuItem disabled={!recipient || isComplete} asChild>
-            <Link to={`/sign/${recipient?.token}`}>
-              {recipient?.role === RecipientRole.VIEWER && (
-                <>
-                  <EyeIcon className="mr-2 h-4 w-4" />
-                  <Trans>View</Trans>
-                </>
-              )}
+        {!isDraft &&
+          recipient &&
+          recipient?.role !== RecipientRole.CC &&
+          recipient?.role !== RecipientRole.ASSISTANT && (
+            <DropdownMenuItem disabled={!recipient || isComplete} asChild>
+              <Link to={`/sign/${recipient?.token}`}>
+                {recipient?.role === RecipientRole.VIEWER && (
+                  <>
+                    <EyeIcon className="mr-2 h-4 w-4" />
+                    <Trans>View</Trans>
+                  </>
+                )}
 
-              {recipient?.role === RecipientRole.SIGNER && (
-                <>
-                  <Pencil className="mr-2 h-4 w-4" />
-                  <Trans>Sign</Trans>
-                </>
-              )}
+                {recipient?.role === RecipientRole.SIGNER && (
+                  <>
+                    <Pencil className="mr-2 h-4 w-4" />
+                    <Trans>Sign</Trans>
+                  </>
+                )}
 
-              {recipient?.role === RecipientRole.APPROVER && (
-                <>
-                  <CheckCircle className="mr-2 h-4 w-4" />
-                  <Trans>Approve</Trans>
-                </>
-              )}
-            </Link>
-          </DropdownMenuItem>
-        )}
+                {recipient?.role === RecipientRole.APPROVER && (
+                  <>
+                    <CheckCircle className="mr-2 h-4 w-4" />
+                    <Trans>Approve</Trans>
+                  </>
+                )}
+              </Link>
+            </DropdownMenuItem>
+          )}
 
         <DropdownMenuItem disabled={!canManageDocument || isComplete} asChild>
           <Link to={formatPath}>
@@ -176,32 +137,49 @@ export const DocumentsTableActionDropdown = ({
           </Link>
         </DropdownMenuItem>
 
-        <DropdownMenuItem disabled={!isComplete} onClick={onDownloadClick}>
-          <Download className="mr-2 h-4 w-4" />
-          <Trans>Download</Trans>
-        </DropdownMenuItem>
-
-        <DropdownMenuItem onClick={onDownloadOriginalClick}>
-          <Download className="mr-2 h-4 w-4" />
-          <Trans>Download Original</Trans>
-        </DropdownMenuItem>
-
-        <DropdownMenuItem onClick={() => setDuplicateDialogOpen(true)}>
-          <Copy className="mr-2 h-4 w-4" />
-          <Trans>Duplicate</Trans>
-        </DropdownMenuItem>
-
-        {/* We don't want to allow teams moving documents across at the moment. */}
-        {!team && !row.teamId && (
-          <DropdownMenuItem onClick={() => setMoveDialogOpen(true)}>
-            <MoveRight className="mr-2 h-4 w-4" />
-            <Trans>Move to Team</Trans>
+        {canManageDocument && canTitleBeChanged && (
+          <DropdownMenuItem onClick={() => setRenameDialogOpen(true)}>
+            <Pencil className="mr-2 h-4 w-4" />
+            <Trans>Rename</Trans>
           </DropdownMenuItem>
         )}
 
-        {onMoveDocument && (
+        <EnvelopeDownloadDialog
+          envelopeId={row.envelopeId}
+          envelopeStatus={row.status}
+          isLegacy={row.internalVersion === 1}
+          token={canManageDocument ? undefined : recipient?.token}
+          trigger={
+            <DropdownMenuItem asChild onSelect={(e) => e.preventDefault()}>
+              <div>
+                <Download className="mr-2 h-4 w-4" />
+                <Trans>Download</Trans>
+              </div>
+            </DropdownMenuItem>
+          }
+        />
+
+        <EnvelopeDuplicateDialog
+          envelopeId={row.envelopeId}
+          envelopeType={EnvelopeType.DOCUMENT}
+          trigger={
+            <DropdownMenuItem asChild onSelect={(e) => e.preventDefault()}>
+              <div>
+                <Copy className="mr-2 h-4 w-4" />
+                <Trans>Duplicate</Trans>
+              </div>
+            </DropdownMenuItem>
+          }
+        />
+
+        <DropdownMenuItem onClick={() => setSaveAsTemplateDialogOpen(true)}>
+          <FileOutputIcon className="mr-2 h-4 w-4" />
+          <Trans>Save as Template</Trans>
+        </DropdownMenuItem>
+
+        {onMoveDocument && canManageDocument && (
           <DropdownMenuItem onClick={onMoveDocument} onSelect={(e) => e.preventDefault()}>
-            <MoveRight className="mr-2 h-4 w-4" />
+            <FolderInput className="mr-2 h-4 w-4" />
             <Trans>Move to Folder</Trans>
           </DropdownMenuItem>
         )}
@@ -212,10 +190,21 @@ export const DocumentsTableActionDropdown = ({
           Void
         </DropdownMenuItem> */}
 
-        <DropdownMenuItem onClick={() => setDeleteDialogOpen(true)}>
-          <Trash2 className="mr-2 h-4 w-4" />
-          {canManageDocument ? _(msg`Delete`) : _(msg`Hide`)}
-        </DropdownMenuItem>
+        <EnvelopeDeleteDialog
+          id={row.envelopeId}
+          type={EnvelopeType.DOCUMENT}
+          status={row.status}
+          title={row.title}
+          canManageDocument={canManageDocument}
+          trigger={
+            <DropdownMenuItem asChild onSelect={(e) => e.preventDefault()}>
+              <div>
+                <Trash2 className="mr-2 h-4 w-4" />
+                {canManageDocument ? _(msg`Delete`) : _(msg`Hide`)}
+              </div>
+            </DropdownMenuItem>
+          }
+        />
 
         <DropdownMenuLabel>
           <Trans>Share</Trans>
@@ -251,26 +240,20 @@ export const DocumentsTableActionDropdown = ({
         />
       </DropdownMenuContent>
 
-      <DocumentDeleteDialog
-        id={row.id}
-        status={row.status}
-        documentTitle={row.title}
-        open={isDeleteDialogOpen}
-        onOpenChange={setDeleteDialogOpen}
-        teamId={team?.id}
-        canManageDocument={canManageDocument}
+      <EnvelopeSaveAsTemplateDialog
+        envelopeId={row.envelopeId}
+        open={isSaveAsTemplateDialogOpen}
+        onOpenChange={setSaveAsTemplateDialogOpen}
       />
 
-      <DocumentMoveDialog
-        documentId={row.id}
-        open={isMoveDialogOpen}
-        onOpenChange={setMoveDialogOpen}
-      />
-
-      <DocumentDuplicateDialog
-        id={row.id}
-        open={isDuplicateDialogOpen}
-        onOpenChange={setDuplicateDialogOpen}
+      <EnvelopeRenameDialog
+        id={row.envelopeId}
+        initialTitle={row.title}
+        open={isRenameDialogOpen}
+        onOpenChange={setRenameDialogOpen}
+        onSuccess={async () => {
+          await trpcUtils.document.findDocumentsInternal.invalidate();
+        }}
       />
     </DropdownMenu>
   );

@@ -1,122 +1,110 @@
-import { AppError, AppErrorCode } from '@documenso/lib/errors/app-error';
-import { findDocuments } from '@documenso/lib/server-only/admin/get-all-documents';
-import { getEntireDocument } from '@documenso/lib/server-only/admin/get-entire-document';
-import { updateRecipient } from '@documenso/lib/server-only/admin/update-recipient';
-import { updateUser } from '@documenso/lib/server-only/admin/update-user';
-import { sealDocument } from '@documenso/lib/server-only/document/seal-document';
-import { sendDeleteEmail } from '@documenso/lib/server-only/document/send-delete-email';
-import { superDeleteDocument } from '@documenso/lib/server-only/document/super-delete-document';
-import { upsertSiteSetting } from '@documenso/lib/server-only/site-settings/upsert-site-setting';
-import { deleteUser } from '@documenso/lib/server-only/user/delete-user';
-import { disableUser } from '@documenso/lib/server-only/user/disable-user';
-import { enableUser } from '@documenso/lib/server-only/user/enable-user';
-import { getUserById } from '@documenso/lib/server-only/user/get-user-by-id';
-import { isDocumentCompleted } from '@documenso/lib/utils/document';
-
-import { adminProcedure, router } from '../trpc';
-import {
-  ZAdminDeleteDocumentMutationSchema,
-  ZAdminDeleteUserMutationSchema,
-  ZAdminDisableUserMutationSchema,
-  ZAdminEnableUserMutationSchema,
-  ZAdminFindDocumentsQuerySchema,
-  ZAdminResealDocumentMutationSchema,
-  ZAdminUpdateProfileMutationSchema,
-  ZAdminUpdateRecipientMutationSchema,
-  ZAdminUpdateSiteSettingMutationSchema,
-} from './schema';
+import { router } from '../trpc';
+import { createAdminOrganisationRoute } from './create-admin-organisation';
+import { createStripeCustomerRoute } from './create-stripe-customer';
+import { createSubscriptionClaimRoute } from './create-subscription-claim';
+import { createUserRoute } from './create-user';
+import { deleteDocumentRoute } from './delete-document';
+import { deleteOrganisationRoute } from './delete-organisation';
+import { deleteAdminOrganisationMemberRoute } from './delete-organisation-member';
+import { deleteSubscriptionClaimRoute } from './delete-subscription-claim';
+import { deleteAdminTeamMemberRoute } from './delete-team-member';
+import { deleteUserRoute } from './delete-user';
+import { disableUserRoute } from './disable-user';
+import { downloadDocumentAuditLogsRoute } from './download-document-audit-logs';
+import { enableUserRoute } from './enable-user';
+import { findAdminOrganisationsRoute } from './find-admin-organisations';
+import { findDocumentAuditLogsRoute } from './find-document-audit-logs';
+import { findDocumentJobsRoute } from './find-document-jobs';
+import { findDocumentsRoute } from './find-documents';
+import { findEmailDomainsRoute } from './find-email-domains';
+import { findOrganisationStatsRoute } from './find-organisation-stats';
+import { findSubscriptionClaimsRoute } from './find-subscription-claims';
+import { findUnsealedDocumentsRoute } from './find-unsealed-documents';
+import { findUserTeamsRoute } from './find-user-teams';
+import { getAdminOrganisationRoute } from './get-admin-organisation';
+import { getAdminTeamRoute } from './get-admin-team';
+import { getEmailDomainRoute } from './get-email-domain';
+import { getUserRoute } from './get-user';
+import { promoteMemberToOwnerRoute } from './promote-member-to-owner';
+import { reregisterEmailDomainRoute } from './reregister-email-domain';
+import { resealDocumentRoute } from './reseal-document';
+import { resetOrganisationMonthlyStatRoute } from './reset-organisation-monthly-stat';
+import { resetTwoFactorRoute } from './reset-two-factor-authentication';
+import { resyncLicenseRoute } from './resync-license';
+import { swapOrganisationSubscriptionRoute } from './swap-organisation-subscription';
+import { syncOrganisationSubscriptionRoute } from './sync-organisation-subscription';
+import { updateAdminOrganisationRoute } from './update-admin-organisation';
+import { updateOrganisationMemberRoleRoute } from './update-organisation-member-role';
+import { updateRecipientRoute } from './update-recipient';
+import { updateSiteSettingRoute } from './update-site-setting';
+import { updateSubscriptionClaimRoute } from './update-subscription-claim';
+import { updateUserRoute } from './update-user';
 
 export const adminRouter = router({
-  findDocuments: adminProcedure.input(ZAdminFindDocumentsQuerySchema).query(async ({ input }) => {
-    const { query, page, perPage } = input;
-
-    return await findDocuments({ query, page, perPage });
-  }),
-
-  updateUser: adminProcedure
-    .input(ZAdminUpdateProfileMutationSchema)
-    .mutation(async ({ input }) => {
-      const { id, name, email, roles } = input;
-
-      return await updateUser({ id, name, email, roles });
-    }),
-
-  updateRecipient: adminProcedure
-    .input(ZAdminUpdateRecipientMutationSchema)
-    .mutation(async ({ input }) => {
-      const { id, name, email } = input;
-
-      return await updateRecipient({ id, name, email });
-    }),
-
-  updateSiteSetting: adminProcedure
-    .input(ZAdminUpdateSiteSettingMutationSchema)
-    .mutation(async ({ ctx, input }) => {
-      const { id, enabled, data } = input;
-
-      return await upsertSiteSetting({
-        id,
-        enabled,
-        data,
-        userId: ctx.user.id,
-      });
-    }),
-
-  resealDocument: adminProcedure
-    .input(ZAdminResealDocumentMutationSchema)
-    .mutation(async ({ input }) => {
-      const { id } = input;
-
-      const document = await getEntireDocument({ id });
-
-      const isResealing = isDocumentCompleted(document.status);
-
-      return await sealDocument({ documentId: id, isResealing });
-    }),
-
-  enableUser: adminProcedure.input(ZAdminEnableUserMutationSchema).mutation(async ({ input }) => {
-    const { id } = input;
-
-    const user = await getUserById({ id }).catch(() => null);
-
-    if (!user) {
-      throw new AppError(AppErrorCode.NOT_FOUND, {
-        message: 'User not found',
-      });
-    }
-
-    return await enableUser({ id });
-  }),
-
-  disableUser: adminProcedure.input(ZAdminDisableUserMutationSchema).mutation(async ({ input }) => {
-    const { id } = input;
-
-    const user = await getUserById({ id }).catch(() => null);
-
-    if (!user) {
-      throw new AppError(AppErrorCode.NOT_FOUND, {
-        message: 'User not found',
-      });
-    }
-
-    return await disableUser({ id });
-  }),
-
-  deleteUser: adminProcedure.input(ZAdminDeleteUserMutationSchema).mutation(async ({ input }) => {
-    const { id } = input;
-
-    return await deleteUser({ id });
-  }),
-
-  deleteDocument: adminProcedure
-    .input(ZAdminDeleteDocumentMutationSchema)
-    .mutation(async ({ ctx, input }) => {
-      const { id, reason } = input;
-      await sendDeleteEmail({ documentId: id, reason });
-
-      return await superDeleteDocument({
-        id,
-        requestMetadata: ctx.metadata.requestMetadata,
-      });
-    }),
+  organisation: {
+    find: findAdminOrganisationsRoute,
+    get: getAdminOrganisationRoute,
+    create: createAdminOrganisationRoute,
+    update: updateAdminOrganisationRoute,
+    delete: deleteOrganisationRoute,
+    subscription: {
+      swap: swapOrganisationSubscriptionRoute,
+      sync: syncOrganisationSubscriptionRoute,
+    },
+    stats: {
+      find: findOrganisationStatsRoute,
+      reset: resetOrganisationMonthlyStatRoute,
+    },
+  },
+  organisationMember: {
+    promoteToOwner: promoteMemberToOwnerRoute,
+    updateRole: updateOrganisationMemberRoleRoute,
+    delete: deleteAdminOrganisationMemberRoute,
+  },
+  claims: {
+    find: findSubscriptionClaimsRoute,
+    create: createSubscriptionClaimRoute,
+    update: updateSubscriptionClaimRoute,
+    delete: deleteSubscriptionClaimRoute,
+  },
+  stripe: {
+    createCustomer: createStripeCustomerRoute,
+  },
+  license: {
+    resync: resyncLicenseRoute,
+  },
+  user: {
+    get: getUserRoute,
+    create: createUserRoute,
+    update: updateUserRoute,
+    delete: deleteUserRoute,
+    enable: enableUserRoute,
+    disable: disableUserRoute,
+    resetTwoFactor: resetTwoFactorRoute,
+    findTeams: findUserTeamsRoute,
+  },
+  document: {
+    find: findDocumentsRoute,
+    findUnsealed: findUnsealedDocumentsRoute,
+    delete: deleteDocumentRoute,
+    reseal: resealDocumentRoute,
+    findJobs: findDocumentJobsRoute,
+    findAuditLogs: findDocumentAuditLogsRoute,
+    downloadAuditLogs: downloadDocumentAuditLogsRoute,
+  },
+  recipient: {
+    update: updateRecipientRoute,
+  },
+  emailDomain: {
+    find: findEmailDomainsRoute,
+    get: getEmailDomainRoute,
+    reregister: reregisterEmailDomainRoute,
+  },
+  team: {
+    get: getAdminTeamRoute,
+  },
+  teamMember: {
+    delete: deleteAdminTeamMemberRoute,
+  },
+  updateSiteSetting: updateSiteSettingRoute,
 });

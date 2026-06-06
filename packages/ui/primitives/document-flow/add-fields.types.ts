@@ -1,7 +1,6 @@
+import { ZFieldMetaSchema } from '@documenso/lib/types/field-meta';
 import { FieldType } from '@prisma/client';
 import { z } from 'zod';
-
-import { ZFieldMetaSchema } from '@documenso/lib/types/field-meta';
 
 export const ZAddFieldsFormSchema = z.object({
   fields: z.array(
@@ -10,6 +9,7 @@ export const ZAddFieldsFormSchema = z.object({
       nativeId: z.number().optional(),
       type: z.nativeEnum(FieldType),
       signerEmail: z.string().min(1),
+      recipientId: z.number().min(1),
       pageNumber: z.number().min(1),
       pageX: z.number().min(0),
       pageY: z.number().min(0),

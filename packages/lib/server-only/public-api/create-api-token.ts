@@ -1,13 +1,13 @@
-import { TeamMemberRole } from '@prisma/client';
+import { prisma } from '@documenso/prisma';
 import type { Duration } from 'luxon';
 import { DateTime } from 'luxon';
 
-import { prisma } from '@documenso/prisma';
-
+import { TEAM_MEMBER_ROLE_PERMISSIONS_MAP } from '../../constants/teams';
 // temporary choice for testing only
 import * as timeConstants from '../../constants/time';
 import { AppError, AppErrorCode } from '../../errors/app-error';
 import { alphaid } from '../../universal/id';
+import { buildTeamWhereQuery } from '../../utils/teams';
 import { hashString } from '../auth/hash';
 
 type TimeConstants = typeof timeConstants & {
@@ -16,37 +16,30 @@ type TimeConstants = typeof timeConstants & {
 
 type CreateApiTokenInput = {
   userId: number;
-  teamId?: number;
+  teamId: number;
   tokenName: string;
   expiresIn: string | null;
 };
 
-export const createApiToken = async ({
-  userId,
-  teamId,
-  tokenName,
-  expiresIn,
-}: CreateApiTokenInput) => {
+export const createApiToken = async ({ userId, teamId, tokenName, expiresIn }: CreateApiTokenInput) => {
   const apiToken = `api_${alphaid(16)}`;
 
   const hashedToken = hashString(apiToken);
 
   const timeConstantsRecords: TimeConstants = timeConstants;
 
-  if (teamId) {
-    const member = await prisma.teamMember.findFirst({
-      where: {
-        userId,
-        teamId,
-        role: TeamMemberRole.ADMIN,
-      },
-    });
+  const team = await prisma.team.findFirst({
+    where: buildTeamWhereQuery({
+      teamId,
+      userId,
+      roles: TEAM_MEMBER_ROLE_PERMISSIONS_MAP['MANAGE_TEAM'],
+    }),
+  });
 
-    if (!member) {
-      throw new AppError(AppErrorCode.UNAUTHORIZED, {
-        message: 'You do not have permission to create a token for this team',
-      });
-    }
+  if (!team) {
+    throw new AppError(AppErrorCode.UNAUTHORIZED, {
+      message: 'You do not have permission to create a token for this team',
+    });
   }
 
   const storedToken = await prisma.apiToken.create({

@@ -1,18 +1,5 @@
-import { z } from 'zod';
-
 import { ZDocumentEmailSettingsSchema } from '@documenso/lib/types/document-email';
 import {
-  ZFieldHeightSchema,
-  ZFieldPageNumberSchema,
-  ZFieldPageXSchema,
-  ZFieldPageYSchema,
-  ZFieldWidthSchema,
-} from '@documenso/lib/types/field';
-import { ZFieldAndMetaSchema } from '@documenso/lib/types/field-meta';
-import { DocumentSigningOrder } from '@documenso/prisma/generated/types';
-
-import {
-  ZDocumentExternalIdSchema,
   ZDocumentMetaDateFormatSchema,
   ZDocumentMetaDistributionMethodSchema,
   ZDocumentMetaDrawSignatureEnabledSchema,
@@ -23,39 +10,48 @@ import {
   ZDocumentMetaTimezoneSchema,
   ZDocumentMetaTypedSignatureEnabledSchema,
   ZDocumentMetaUploadSignatureEnabledSchema,
-  ZDocumentTitleSchema,
-} from '../document-router/schema';
-import { ZCreateRecipientSchema } from '../recipient-router/schema';
+} from '@documenso/lib/types/document-meta';
+import {
+  ZFieldHeightSchema,
+  ZFieldPageNumberSchema,
+  ZFieldPageXSchema,
+  ZFieldPageYSchema,
+  ZFieldWidthSchema,
+} from '@documenso/lib/types/field';
+import { ZFieldAndMetaSchema } from '@documenso/lib/types/field-meta';
+import { zEmail } from '@documenso/lib/utils/zod';
+import { RecipientRole } from '@documenso/prisma/client';
+import { DocumentSigningOrder } from '@documenso/prisma/generated/types';
+import { z } from 'zod';
+
+import { ZDocumentExternalIdSchema, ZDocumentTitleSchema } from '../document-router/schema';
 
 export const ZCreateEmbeddingDocumentRequestSchema = z.object({
   title: ZDocumentTitleSchema,
   documentDataId: z.string(),
   externalId: ZDocumentExternalIdSchema.optional(),
-  recipients: z
-    .array(
-      ZCreateRecipientSchema.extend({
-        fields: ZFieldAndMetaSchema.and(
-          z.object({
-            pageNumber: ZFieldPageNumberSchema,
-            pageX: ZFieldPageXSchema,
-            pageY: ZFieldPageYSchema,
-            width: ZFieldWidthSchema,
-            height: ZFieldHeightSchema,
-          }),
-        )
-          .array()
-          .optional(),
-      }),
-    )
-    .refine(
-      (recipients) => {
-        const emails = recipients.map((recipient) => recipient.email);
-
-        return new Set(emails).size === emails.length;
-      },
-      { message: 'Recipients must have unique emails' },
-    )
-    .optional(),
+  recipients: z.array(
+    z.object({
+      id: z.number().optional(),
+      email: zEmail(),
+      name: z.string(),
+      role: z.nativeEnum(RecipientRole),
+      signingOrder: z.number().optional(),
+      // We have an any cast so any changes here you need to update it in the embeding document edit page
+      // Search: "map<any>" to find it
+      fields: ZFieldAndMetaSchema.and(
+        z.object({
+          pageNumber: ZFieldPageNumberSchema,
+          pageX: ZFieldPageXSchema,
+          pageY: ZFieldPageYSchema,
+          width: ZFieldWidthSchema,
+          height: ZFieldHeightSchema,
+        }),
+      )
+        .array()
+        .optional(),
+    }),
+  ),
   meta: z
     .object({
       subject: ZDocumentMetaSubjectSchema.optional(),
@@ -78,6 +74,4 @@ export const ZCreateEmbeddingDocumentResponseSchema = z.object({
   documentId: z.number(),
 });
 
-export type TCreateEmbeddingDocumentRequestSchema = z.infer<
-  typeof ZCreateEmbeddingDocumentRequestSchema
->;
+export type TCreateEmbeddingDocumentRequestSchema = z.infer<typeof ZCreateEmbeddingDocumentRequestSchema>;

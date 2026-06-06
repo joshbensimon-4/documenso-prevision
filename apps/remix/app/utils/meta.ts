@@ -1,11 +1,12 @@
 import { NEXT_PUBLIC_WEBAPP_URL } from '@documenso/lib/constants/app';
+import { i18n, type MessageDescriptor } from '@lingui/core';
 
-export const appMetaTags = (title?: string) => {
+export const appMetaTags = (title?: MessageDescriptor) => {
   const description = 'Prepa Prevision - signature de documents';
 
   return [
     {
-      title: title ? `${title} - Prepa Prevision` : 'Prepa Prevision',
+      title: title ? `${i18n._(title)} - Prepa Prevision` : 'Prepa Prevision',
     },
     {
       name: 'description',

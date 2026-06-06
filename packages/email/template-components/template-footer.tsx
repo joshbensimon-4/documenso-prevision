@@ -1,6 +1,4 @@
-import { Trans } from '@lingui/react/macro';
-
-import { Link, Section, Text } from '../components';
+import { Section, Text } from '../components';
 import { useBranding } from '../providers/branding';
 
 export type TemplateFooterProps = {
@@ -13,7 +11,7 @@ export const TemplateFooter = ({ isDocument = true }: TemplateFooterProps) => {
   return (
     <Section>
       {isDocument && !branding.brandingHidePoweredBy && branding.brandingCompanyDetails ? (
-        <Text className="my-8 text-sm text-slate-400">
+        <Text className="my-8 text-slate-400 text-sm">
           {branding.brandingCompanyDetails.split('\n').map((line, idx) => {
             return (
               <>

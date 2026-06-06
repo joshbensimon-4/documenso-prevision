@@ -1,85 +1,71 @@
-import type { Recipient } from '@prisma/client';
-import { nanoid } from 'nanoid';
-
 import {
   DIRECT_TEMPLATE_RECIPIENT_EMAIL,
   DIRECT_TEMPLATE_RECIPIENT_NAME,
 } from '@documenso/lib/constants/direct-templates';
 import { prisma } from '@documenso/prisma';
+import { EnvelopeType, type Recipient } from '@prisma/client';
+import { nanoid } from 'nanoid';
 
 import { AppError, AppErrorCode } from '../../errors/app-error';
+import { type EnvelopeIdOptions, mapSecondaryIdToTemplateId } from '../../utils/envelope';
+import { getEnvelopeWhereInput } from '../envelope/get-envelope-by-id';
 
 export type CreateTemplateDirectLinkOptions = {
-  templateId: number;
+  id: EnvelopeIdOptions;
   userId: number;
-  teamId?: number;
+  teamId: number;
   directRecipientId?: number;
 };
 
 export const createTemplateDirectLink = async ({
-  templateId,
+  id,
   userId,
   teamId,
   directRecipientId,
 }: CreateTemplateDirectLinkOptions) => {
-  const template = await prisma.template.findFirst({
-    where: {
-      id: templateId,
-      ...(teamId
-        ? {
-            team: {
-              id: teamId,
-              members: {
-                some: {
-                  userId,
-                },
-              },
-            },
-          }
-        : {
-            userId,
-            teamId: null,
-          }),
-    },
+  const { envelopeWhereInput } = await getEnvelopeWhereInput({
+    id,
+    type: EnvelopeType.TEMPLATE,
+    userId,
+    teamId,
+  });
+
+  const envelope = await prisma.envelope.findFirst({
+    where: envelopeWhereInput,
     include: {
       recipients: true,
       directLink: true,
     },
   });
 
-  if (!template) {
+  if (!envelope) {
     throw new AppError(AppErrorCode.NOT_FOUND, { message: 'Template not found' });
   }
 
-  if (template.directLink) {
+  if (envelope.directLink) {
     throw new AppError(AppErrorCode.ALREADY_EXISTS, { message: 'Direct template already exists' });
   }
 
-  if (
-    directRecipientId &&
-    !template.recipients.find((recipient) => recipient.id === directRecipientId)
-  ) {
+  if (directRecipientId && !envelope.recipients.find((recipient) => recipient.id === directRecipientId)) {
     throw new AppError(AppErrorCode.NOT_FOUND, { message: 'Recipient not found' });
   }
 
   if (
     !directRecipientId &&
-    template.recipients.find(
-      (recipient) => recipient.email.toLowerCase() === DIRECT_TEMPLATE_RECIPIENT_EMAIL,
-    )
+    envelope.recipients.find((recipient) => recipient.email.toLowerCase() === DIRECT_TEMPLATE_RECIPIENT_EMAIL)
   ) {
     throw new AppError(AppErrorCode.INVALID_BODY, {
       message: 'Cannot generate placeholder direct recipient',
     });
   }
 
-  return await prisma.$transaction(async (tx) => {
+  const createdDirectLink = await prisma.$transaction(async (tx) => {
     let recipient: Recipient | undefined;
 
     if (directRecipientId) {
       recipient = await tx.recipient.update({
         where: {
-          templateId,
+          envelopeId: envelope.id,
           id: directRecipientId,
         },
         data: {
@@ -90,7 +76,7 @@ export const createTemplateDirectLink = async ({
     } else {
       recipient = await tx.recipient.create({
         data: {
-          templateId,
+          envelopeId: envelope.id,
           name: DIRECT_TEMPLATE_RECIPIENT_NAME,
           email: DIRECT_TEMPLATE_RECIPIENT_EMAIL,
           token: nanoid(),
@@ -100,11 +86,21 @@ export const createTemplateDirectLink = async ({
 
     return await tx.templateDirectLink.create({
       data: {
-        templateId,
+        envelopeId: envelope.id,
         enabled: true,
         token: nanoid(),
         directTemplateRecipientId: recipient.id,
       },
     });
   });
+
+  return {
+    id: createdDirectLink.id,
+    token: createdDirectLink.token,
+    createdAt: createdDirectLink.createdAt,
+    enabled: createdDirectLink.enabled,
+    directTemplateRecipientId: createdDirectLink.directTemplateRecipientId,
+    templateId: mapSecondaryIdToTemplateId(envelope.secondaryId),
+    envelopeId: envelope.id,
+  };
 };

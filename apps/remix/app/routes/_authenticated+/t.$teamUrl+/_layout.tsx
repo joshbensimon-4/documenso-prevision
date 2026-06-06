@@ -1,37 +1,27 @@
-import { useMemo } from 'react';
-
+import { DEFAULT_MINIMUM_ENVELOPE_ITEM_COUNT, PAID_PLAN_LIMITS } from '@documenso/ee/server-only/limits/constants';
+import { LimitsProvider } from '@documenso/ee/server-only/limits/provider/client';
+import { useOptionalCurrentOrganisation } from '@documenso/lib/client-only/providers/organisation';
+import { TrpcProvider } from '@documenso/trpc/react';
+import { Button } from '@documenso/ui/primitives/button';
 import { msg } from '@lingui/core/macro';
 import { Trans } from '@lingui/react/macro';
 import { SubscriptionStatus } from '@prisma/client';
+import { useMemo } from 'react';
 import { Link, Outlet } from 'react-router';
 
-import { TEAM_PLAN_LIMITS } from '@documenso/ee/server-only/limits/constants';
-import { LimitsProvider } from '@documenso/ee/server-only/limits/provider/client';
-import { useSession } from '@documenso/lib/client-only/providers/session';
-import { TrpcProvider } from '@documenso/trpc/react';
-import { Button } from '@documenso/ui/primitives/button';
-
 import { GenericErrorLayout } from '~/components/general/generic-error-layout';
-import { PortalComponent } from '~/components/general/portal';
-import { TeamLayoutBillingBanner } from '~/components/general/teams/team-layout-billing-banner';
-import { TeamProvider } from '~/providers/team';
+import { useOptionalCurrentTeam } from '~/providers/team';
 
-import type { Route } from './+types/_layout';
-
-export default function Layout({ params }: Route.ComponentProps) {
-  const { teams } = useSession();
-
-  const currentTeam = teams.find((team) => team.url === params.teamUrl);
+export default function Layout() {
+  const team = useOptionalCurrentTeam();
+  const organisation = useOptionalCurrentOrganisation();
 
   const limits = useMemo(() => {
-    if (!currentTeam) {
+    if (!organisation) {
       return undefined;
     }
 
-    if (
-      currentTeam?.subscription &&
-      currentTeam.subscription.status === SubscriptionStatus.INACTIVE
-    ) {
+    if (organisation?.subscription && organisation.subscription.status === SubscriptionStatus.INACTIVE) {
       return {
         quota: {
           documents: 0,
@@ -43,16 +33,18 @@ export default function Layout({ params }: Route.ComponentProps) {
           recipients: 0,
           directTemplates: 0,
         },
+        maximumEnvelopeItemCount: 0,
       };
     }
 
     return {
-      quota: TEAM_PLAN_LIMITS,
-      remaining: TEAM_PLAN_LIMITS,
+      quota: PAID_PLAN_LIMITS,
+      remaining: PAID_PLAN_LIMITS,
+      maximumEnvelopeItemCount: DEFAULT_MINIMUM_ENVELOPE_ITEM_COUNT,
     };
-  }, [currentTeam?.subscription, currentTeam?.id]);
+  }, [organisation?.subscription]);
 
-  if (!currentTeam) {
+  if (!team) {
     return (
       <GenericErrorLayout
         errorCode={404}
@@ -60,8 +52,7 @@ export default function Layout({ params }: Route.ComponentProps) {
           404: {
             heading: msg`Team not found`,
             subHeading: msg`404 Team not found`,
-            message: msg`The team you are looking for may have been removed, renamed or may have never
-                existed.`,
+            message: msg`The team you are looking for may have been removed, renamed or may have never existed.`,
           },
         }}
         primaryButton={
@@ -76,29 +67,18 @@ export default function Layout({ params }: Route.ComponentProps) {
   }
 
   const trpcHeaders = {
-    'x-team-Id': currentTeam.id.toString(),
+    'x-team-Id': team.id.toString(),
   };
 
+  // Note: We use a key to force a re-render if the team context changes.
+  // This is required otherwise you would see the wrong page content.
   return (
-    <TeamProvider team={currentTeam}>
-      <LimitsProvider initialValue={limits} teamId={currentTeam.id}>
-        <TrpcProvider headers={trpcHeaders}>
-          {currentTeam?.subscription &&
-            currentTeam.subscription.status !== SubscriptionStatus.ACTIVE && (
-              <PortalComponent target="portal-header">
-                <TeamLayoutBillingBanner
-                  subscriptionStatus={currentTeam.subscription.status}
-                  teamId={currentTeam.id}
-                  userRole={currentTeam.currentTeamMember.role}
-                />
-              </PortalComponent>
-            )}
-
-          <main className="mt-8 pb-8 md:mt-12 md:pb-12">
-            <Outlet />
-          </main>
-        </TrpcProvider>
-      </LimitsProvider>
-    </TeamProvider>
+    <div key={team.url}>
+      <TrpcProvider headers={trpcHeaders}>
+        <LimitsProvider initialValue={limits} teamId={team.id}>
+          <Outlet />
+        </LimitsProvider>
+      </TrpcProvider>
+    </div>
   );
 }

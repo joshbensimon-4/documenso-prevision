@@ -1,68 +1,42 @@
-import { msg } from '@lingui/core/macro';
-import { useLingui } from '@lingui/react';
-import { Trans } from '@lingui/react/macro';
-import { DownloadIcon } from 'lucide-react';
-
+import { downloadFile } from '@documenso/lib/client-only/download-file';
+import { base64 } from '@documenso/lib/universal/base64';
 import { trpc } from '@documenso/trpc/react';
 import { cn } from '@documenso/ui/lib/utils';
 import { Button } from '@documenso/ui/primitives/button';
 import { useToast } from '@documenso/ui/primitives/use-toast';
+import { msg } from '@lingui/core/macro';
+import { useLingui } from '@lingui/react';
+import { Trans } from '@lingui/react/macro';
+import { DownloadIcon } from 'lucide-react';
 
 export type DocumentAuditLogDownloadButtonProps = {
   className?: string;
   documentId: number;
 };
 
-export const DocumentAuditLogDownloadButton = ({
-  className,
-  documentId,
-}: DocumentAuditLogDownloadButtonProps) => {
+export const DocumentAuditLogDownloadButton = ({ className, documentId }: DocumentAuditLogDownloadButtonProps) => {
   const { toast } = useToast();
   const { _ } = useLingui();
 
-  const { mutateAsync: downloadAuditLogs, isPending } =
-    trpc.document.downloadAuditLogs.useMutation();
+  const { mutateAsync: downloadAuditLogs, isPending } = trpc.document.auditLog.download.useMutation();
 
   const onDownloadAuditLogsClick = async () => {
     try {
-      const { url } = await downloadAuditLogs({ documentId });
+      const { data, envelopeTitle } = await downloadAuditLogs({ documentId });
 
-      const iframe = Object.assign(document.createElement('iframe'), {
-        src: url,
+      const buffer = new Uint8Array(base64.decode(data));
+      const blob = new Blob([buffer], { type: 'application/pdf' });
+
+      downloadFile({
+        data: blob,
+        filename: `${envelopeTitle} - Audit Logs.pdf`,
       });
-
-      Object.assign(iframe.style, {
-        position: 'fixed',
-        top: '0',
-        left: '0',
-        width: '0',
-        height: '0',
-      });
-
-      const onLoaded = () => {
-        if (iframe.contentDocument?.readyState === 'complete') {
-          iframe.contentWindow?.print();
-
-          iframe.contentWindow?.addEventListener('afterprint', () => {
-            document.body.removeChild(iframe);
-          });
-        }
-      };
-
-      // When the iframe has loaded, print the iframe and remove it from the dom
-      iframe.addEventListener('load', onLoaded);
-
-      document.body.appendChild(iframe);
-
-      onLoaded();
     } catch (error) {
       console.error(error);
 
       toast({
         title: _(msg`Something went wrong`),
-        description: _(
-          msg`Sorry, we were unable to download the audit logs. Please try again later.`,
-        ),
+        description: _(msg`Sorry, we were unable to download the audit logs. Please try again later.`),
         variant: 'destructive',
       });
     }

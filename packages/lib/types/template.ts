@@ -1,12 +1,11 @@
-import type { z } from 'zod';
-
 import { DocumentDataSchema } from '@documenso/prisma/generated/zod/modelSchema/DocumentDataSchema';
+import { DocumentMetaSchema } from '@documenso/prisma/generated/zod/modelSchema/DocumentMetaSchema';
+import EnvelopeItemSchema from '@documenso/prisma/generated/zod/modelSchema/EnvelopeItemSchema';
 import { FolderSchema } from '@documenso/prisma/generated/zod/modelSchema/FolderSchema';
 import TeamSchema from '@documenso/prisma/generated/zod/modelSchema/TeamSchema';
-import { TemplateDirectLinkSchema } from '@documenso/prisma/generated/zod/modelSchema/TemplateDirectLinkSchema';
-import { TemplateMetaSchema } from '@documenso/prisma/generated/zod/modelSchema/TemplateMetaSchema';
-import { TemplateSchema } from '@documenso/prisma/generated/zod/modelSchema/TemplateSchema';
 import { UserSchema } from '@documenso/prisma/generated/zod/modelSchema/UserSchema';
+import { LegacyTemplateDirectLinkSchema, TemplateSchema } from '@documenso/prisma/types/template-legacy-schema';
+import { z } from 'zod';
 
 import { ZFieldSchema } from './field';
 import { ZRecipientLiteSchema } from './recipient';
@@ -25,21 +24,27 @@ export const ZTemplateSchema = TemplateSchema.pick({
   userId: true,
   teamId: true,
   authOptions: true,
-  templateDocumentDataId: true,
   createdAt: true,
   updatedAt: true,
   publicTitle: true,
   publicDescription: true,
   folderId: true,
 }).extend({
+  envelopeId: z.string(),
+
+  // Backwards compatibility.
+  templateDocumentDataId: z.string().default(''),
+
   // Todo: Maybe we want to alter this a bit since this returns a lot of data.
   templateDocumentData: DocumentDataSchema.pick({
     type: true,
     id: true,
     data: true,
     initialData: true,
+  }).extend({
+    envelopeItemId: z.string(),
   }),
-  templateMeta: TemplateMetaSchema.pick({
+  templateMeta: DocumentMetaSchema.pick({
     id: true,
     subject: true,
     message: true,
@@ -51,12 +56,15 @@ export const ZTemplateSchema = TemplateSchema.pick({
     drawSignatureEnabled: true,
     allowDictateNextSigner: true,
     distributionMethod: true,
-    templateId: true,
     redirectUrl: true,
     language: true,
     emailSettings: true,
-  }).nullable(),
-  directLink: TemplateDirectLinkSchema.nullable(),
+    emailId: true,
+    emailReplyTo: true,
+  }).extend({
+    templateId: z.number().nullable(),
+  }),
+  directLink: LegacyTemplateDirectLinkSchema.nullable(),
   user: UserSchema.pick({
     id: true,
     name: true,
@@ -76,6 +84,10 @@ export const ZTemplateSchema = TemplateSchema.pick({
     createdAt: true,
     updatedAt: true,
   }).nullable(),
+  envelopeItems: EnvelopeItemSchema.pick({
+    id: true,
+    envelopeId: true,
+  }).array(),
 });
 
 export type TTemplate = z.infer<typeof ZTemplateSchema>;
@@ -92,14 +104,20 @@ export const ZTemplateLiteSchema = TemplateSchema.pick({
   userId: true,
   teamId: true,
   authOptions: true,
-  templateDocumentDataId: true,
   createdAt: true,
   updatedAt: true,
   publicTitle: true,
   publicDescription: true,
   folderId: true,
   useLegacyFieldInsertion: true,
+}).extend({
+  envelopeId: z.string(),
+
+  // Backwards compatibility.
+  templateDocumentDataId: z.string().default(''),
 });
+
+export type TTemplateLite = z.infer<typeof ZTemplateLiteSchema>;
 
 /**
  * A version of the template response schema when returning multiple template at once from a single API endpoint.
@@ -113,7 +131,6 @@ export const ZTemplateManySchema = TemplateSchema.pick({
   userId: true,
   teamId: true,
   authOptions: true,
-  templateDocumentDataId: true,
   createdAt: true,
   updatedAt: true,
   publicTitle: true,
@@ -121,18 +138,24 @@ export const ZTemplateManySchema = TemplateSchema.pick({
   folderId: true,
   useLegacyFieldInsertion: true,
 }).extend({
+  envelopeId: z.string(),
   team: TeamSchema.pick({
     id: true,
     url: true,
+    name: true,
   }).nullable(),
   fields: ZFieldSchema.array(),
   recipients: ZRecipientLiteSchema.array(),
-  templateMeta: TemplateMetaSchema.pick({
+  templateMeta: DocumentMetaSchema.pick({
     signingOrder: true,
     distributionMethod: true,
   }).nullable(),
-  directLink: TemplateDirectLinkSchema.pick({
+  directLink: LegacyTemplateDirectLinkSchema.pick({
     token: true,
     enabled: true,
   }).nullable(),
+  // Backwards compatibility.
+  templateDocumentDataId: z.string().default(''),
 });
+
+export type TTemplateMany = z.infer<typeof ZTemplateManySchema>;

@@ -1,88 +1,87 @@
-import { createElement } from 'react';
-
-import { msg } from '@lingui/core/macro';
-
 import { mailer } from '@documenso/email/mailer';
 import { DocumentSuperDeleteEmailTemplate } from '@documenso/email/templates/document-super-delete';
 import { prisma } from '@documenso/prisma';
+import { msg } from '@lingui/core/macro';
+import { createElement } from 'react';
 
 import { getI18nInstance } from '../../client-only/providers/i18n-server';
 import { NEXT_PUBLIC_WEBAPP_URL } from '../../constants/app';
 import { AppError, AppErrorCode } from '../../errors/app-error';
 import { extractDerivedDocumentEmailSettings } from '../../types/document-email';
-import { env } from '../../utils/env';
 import { renderEmailWithI18N } from '../../utils/render-email-with-i18n';
-import { teamGlobalSettingsToBranding } from '../../utils/team-global-settings-to-branding';
+import { getEmailContext } from '../email/get-email-context';
 
 export interface SendDeleteEmailOptions {
-  documentId: number;
+  envelopeId: string;
   reason: string;
 }
 
-export const sendDeleteEmail = async ({ documentId, reason }: SendDeleteEmailOptions) => {
-  const document = await prisma.document.findFirst({
+// Note: Currently only sent by Admin function
+export const sendDeleteEmail = async ({ envelopeId, reason }: SendDeleteEmailOptions) => {
+  const envelope = await prisma.envelope.findFirst({
     where: {
-      id: documentId,
+      id: envelopeId,
     },
     include: {
-      user: true,
-      documentMeta: true,
-      team: {
-        include: {
-          teamGlobalSettings: true,
+      user: {
+        select: {
+          id: true,
+          email: true,
+          name: true,
         },
       },
+      documentMeta: true,
     },
   });
 
-  if (!document) {
+  if (!envelope) {
     throw new AppError(AppErrorCode.NOT_FOUND, {
       message: 'Document not found',
     });
   }
 
-  const isDocumentDeletedEmailEnabled = extractDerivedDocumentEmailSettings(
-    document.documentMeta,
-  ).documentDeleted;
+  const isDocumentDeletedEmailEnabled = extractDerivedDocumentEmailSettings(envelope.documentMeta).documentDeleted;
 
   if (!isDocumentDeletedEmailEnabled) {
     return;
   }
 
-  const { email, name } = document.user;
+  const { branding, emailLanguage, senderEmail } = await getEmailContext({
+    emailType: 'INTERNAL',
+    source: {
+      type: 'team',
+      teamId: envelope.teamId,
+    },
+    meta: envelope.documentMeta,
+  });
+
+  const { email, name } = envelope.user;
 
   const assetBaseUrl = NEXT_PUBLIC_WEBAPP_URL() || 'http://localhost:3000';
 
   const template = createElement(DocumentSuperDeleteEmailTemplate, {
-    documentName: document.title,
+    documentName: envelope.title,
     reason,
     assetBaseUrl,
   });
 
-  const branding = document.team?.teamGlobalSettings
-    ? teamGlobalSettingsToBranding(document.team.teamGlobalSettings)
-    : undefined;
-
   const [html, text] = await Promise.all([
-    renderEmailWithI18N(template, { lang: document.documentMeta?.language, branding }),
+    renderEmailWithI18N(template, { lang: emailLanguage, branding }),
     renderEmailWithI18N(template, {
-      lang: document.documentMeta?.language,
+      lang: emailLanguage,
       branding,
       plainText: true,
     }),
   ]);
 
-  const i18n = await getI18nInstance();
+  const i18n = await getI18nInstance(emailLanguage);
 
   await mailer.sendMail({
     to: {
       address: email,
       name: name || '',
     },
-    from: {
-      name: env('NEXT_PRIVATE_SMTP_FROM_NAME') || 'Documenso',
-      address: env('NEXT_PRIVATE_SMTP_FROM_ADDRESS') || 'noreply@documenso.com',
-    },
+    from: senderEmail,
     subject: i18n._(msg`Document Deleted!`),
     html,
     text,

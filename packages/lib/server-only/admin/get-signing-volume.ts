@@ -1,7 +1,19 @@
-import { prisma } from '@documenso/prisma';
-import { DocumentStatus, SubscriptionStatus } from '@documenso/prisma/client';
+import type { DateRange } from '@documenso/lib/types/search-params';
+import { kyselyPrisma, sql } from '@documenso/prisma';
+import { DocumentStatus, EnvelopeType } from '@prisma/client';
 
-type GetSigningVolumeOptions = {
+export type OrganisationInsights = {
+  id: number;
+  name: string;
+  signingVolume: number;
+  createdAt: Date;
+  customerId: string | null;
+  subscriptionStatus?: string;
+  teamCount?: number;
+  memberCount?: number;
+};
+
+export type GetSigningVolumeOptions = {
   search?: string;
   page?: number;
   perPage?: number;
@@ -9,187 +21,195 @@ type GetSigningVolumeOptions = {
   sortOrder?: 'asc' | 'desc';
 };
 
-export const getSigningVolume = async ({
+export async function getSigningVolume({
   search = '',
   page = 1,
   perPage = 10,
   sortBy = 'signingVolume',
   sortOrder = 'desc',
-}: GetSigningVolumeOptions) => {
-  const validPage = Math.max(1, page);
-  const validPerPage = Math.max(1, perPage);
-  const skip = (validPage - 1) * validPerPage;
+}: GetSigningVolumeOptions) {
+  const offset = Math.max(page - 1, 0) * perPage;
 
-  const activeSubscriptions = await prisma.subscription.findMany({
-    where: {
-      status: SubscriptionStatus.ACTIVE,
-    },
-    select: {
-      id: true,
-      planId: true,
-      userId: true,
-      teamId: true,
-      createdAt: true,
-      user: {
-        select: {
-          id: true,
-          name: true,
-          email: true,
-          createdAt: true,
-        },
-      },
-      team: {
-        select: {
-          id: true,
-          name: true,
-          teamEmail: {
-            select: {
-              email: true,
-            },
-          },
-          createdAt: true,
-        },
-      },
-    },
-  });
+  let findQuery = kyselyPrisma.$kysely
+    .selectFrom('Organisation as o')
+    .where((eb) =>
+      eb.or([
+        eb('o.name', 'ilike', `%${search}%`),
+        eb.exists(
+          eb.selectFrom('Team as t').whereRef('t.organisationId', '=', 'o.id').where('t.name', 'ilike', `%${search}%`),
+        ),
+      ]),
+    )
+    .select((eb) => [
+      'o.id as id',
+      'o.createdAt as createdAt',
+      'o.customerId as customerId',
+      sql<string>`COALESCE(o.name, 'Unknown')`.as('name'),
+      eb
+        .selectFrom('Envelope as e')
+        .innerJoin('Team as t', 't.id', 'e.teamId')
+        .whereRef('t.organisationId', '=', 'o.id')
+        .where('e.status', '=', sql.lit(DocumentStatus.COMPLETED))
+        .where('e.deletedAt', 'is', null)
+        .where('e.type', '=', sql.lit(EnvelopeType.DOCUMENT))
+        .select(sql<number>`count(e.id)`.as('count'))
+        .as('signingVolume'),
+    ]);
 
-  const userSubscriptionsMap = new Map();
-  const teamSubscriptionsMap = new Map();
+  switch (sortBy) {
+    case 'name':
+      findQuery = findQuery.orderBy('name', sortOrder);
+      break;
+    case 'createdAt':
+      findQuery = findQuery.orderBy('createdAt', sortOrder);
+      break;
+    case 'signingVolume':
+      findQuery = findQuery.orderBy('signingVolume', sortOrder);
+      break;
+    default:
+      findQuery = findQuery.orderBy('signingVolume', 'desc');
+  }
 
-  activeSubscriptions.forEach((subscription) => {
-    const isTeam = !!subscription.teamId;
+  findQuery = findQuery.limit(perPage).offset(offset);
 
-    if (isTeam && subscription.teamId) {
-      if (!teamSubscriptionsMap.has(subscription.teamId)) {
-        teamSubscriptionsMap.set(subscription.teamId, {
-          id: subscription.id,
-          planId: subscription.planId,
-          teamId: subscription.teamId,
-          name: subscription.team?.name || '',
-          email: subscription.team?.teamEmail?.email || `Team ${subscription.team?.id}`,
-          createdAt: subscription.team?.createdAt,
-          isTeam: true,
-          subscriptionIds: [subscription.id],
-        });
-      } else {
-        const existingTeam = teamSubscriptionsMap.get(subscription.teamId);
-        existingTeam.subscriptionIds.push(subscription.id);
-      }
-    } else if (subscription.userId) {
-      if (!userSubscriptionsMap.has(subscription.userId)) {
-        userSubscriptionsMap.set(subscription.userId, {
-          id: subscription.id,
-          planId: subscription.planId,
-          userId: subscription.userId,
-          name: subscription.user?.name || '',
-          email: subscription.user?.email || '',
-          createdAt: subscription.user?.createdAt,
-          isTeam: false,
-          subscriptionIds: [subscription.id],
-        });
-      } else {
-        const existingUser = userSubscriptionsMap.get(subscription.userId);
-        existingUser.subscriptionIds.push(subscription.id);
-      }
-    }
-  });
+  const countQuery = kyselyPrisma.$kysely
+    .selectFrom('Organisation as o')
+    .where((eb) =>
+      eb.or([
+        eb('o.name', 'ilike', `%${search}%`),
+        eb.exists(
+          eb.selectFrom('Team as t').whereRef('t.organisationId', '=', 'o.id').where('t.name', 'ilike', `%${search}%`),
+        ),
+      ]),
+    )
+    .select(({ fn }) => [fn.countAll().as('count')]);
 
-  const subscriptions = [
-    ...Array.from(userSubscriptionsMap.values()),
-    ...Array.from(teamSubscriptionsMap.values()),
-  ];
-
-  const filteredSubscriptions = search
-    ? subscriptions.filter((sub) => {
-        const searchLower = search.toLowerCase();
-        return (
-          sub.name?.toLowerCase().includes(searchLower) ||
-          sub.email?.toLowerCase().includes(searchLower)
-        );
-      })
-    : subscriptions;
-
-  const signingVolume = await Promise.all(
-    filteredSubscriptions.map(async (subscription) => {
-      let signingVolume = 0;
-
-      if (subscription.userId && !subscription.isTeam) {
-        const personalCount = await prisma.document.count({
-          where: {
-            userId: subscription.userId,
-            status: DocumentStatus.COMPLETED,
-            teamId: null,
-          },
-        });
-
-        signingVolume += personalCount;
-
-        const userTeams = await prisma.teamMember.findMany({
-          where: {
-            userId: subscription.userId,
-          },
-          select: {
-            teamId: true,
-          },
-        });
-
-        if (userTeams.length > 0) {
-          const teamIds = userTeams.map((team) => team.teamId);
-          const teamCount = await prisma.document.count({
-            where: {
-              teamId: {
-                in: teamIds,
-              },
-              status: DocumentStatus.COMPLETED,
-            },
-          });
-
-          signingVolume += teamCount;
-        }
-      }
-
-      if (subscription.teamId) {
-        const teamCount = await prisma.document.count({
-          where: {
-            teamId: subscription.teamId,
-            status: DocumentStatus.COMPLETED,
-          },
-        });
-
-        signingVolume += teamCount;
-      }
-
-      return {
-        ...subscription,
-        signingVolume,
-      };
-    }),
-  );
-
-  const sortedResults = [...signingVolume].sort((a, b) => {
-    if (sortBy === 'name') {
-      return sortOrder === 'asc'
-        ? (a.name || '').localeCompare(b.name || '')
-        : (b.name || '').localeCompare(a.name || '');
-    }
-
-    if (sortBy === 'createdAt') {
-      const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-      const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-      return sortOrder === 'asc' ? dateA - dateB : dateB - dateA;
-    }
-
-    return sortOrder === 'asc'
-      ? a.signingVolume - b.signingVolume
-      : b.signingVolume - a.signingVolume;
-  });
-
-  const paginatedResults = sortedResults.slice(skip, skip + validPerPage);
-
-  const totalPages = Math.ceil(sortedResults.length / validPerPage);
+  const [results, [{ count }]] = await Promise.all([findQuery.execute(), countQuery.execute()]);
 
   return {
-    leaderboard: paginatedResults,
-    totalPages,
+    organisations: results,
+    totalPages: Math.ceil(Number(count) / perPage),
   };
+}
+
+export type GetOrganisationInsightsOptions = GetSigningVolumeOptions & {
+  dateRange?: DateRange;
+  startDate?: Date;
+  endDate?: Date;
 };
+
+export async function getOrganisationInsights({
+  search = '',
+  page = 1,
+  perPage = 10,
+  sortBy = 'signingVolume',
+  sortOrder = 'desc',
+  dateRange = 'last30days',
+  startDate,
+  endDate,
+}: GetOrganisationInsightsOptions) {
+  const offset = Math.max(page - 1, 0) * perPage;
+
+  const now = new Date();
+  let dateCondition = sql<boolean>`1=1`;
+
+  if (startDate && endDate) {
+    dateCondition = sql<boolean>`e."createdAt" >= ${startDate} AND e."createdAt" <= ${endDate}`;
+  } else {
+    switch (dateRange) {
+      case 'last30days': {
+        const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+        dateCondition = sql<boolean>`e."createdAt" >= ${thirtyDaysAgo}`;
+        break;
+      }
+      case 'last90days': {
+        const ninetyDaysAgo = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+        dateCondition = sql<boolean>`e."createdAt" >= ${ninetyDaysAgo}`;
+        break;
+      }
+      case 'lastYear': {
+        const oneYearAgo = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate());
+        dateCondition = sql<boolean>`e."createdAt" >= ${oneYearAgo}`;
+        break;
+      }
+      case 'allTime':
+      default:
+        dateCondition = sql<boolean>`1=1`;
+        break;
+    }
+  }
+
+  let findQuery = kyselyPrisma.$kysely
+    .selectFrom('Organisation as o')
+    .leftJoin('Subscription as s', 'o.id', 's.organisationId')
+    .where((eb) =>
+      eb.or([
+        eb('o.name', 'ilike', `%${search}%`),
+        eb.exists(
+          eb.selectFrom('Team as t').whereRef('t.organisationId', '=', 'o.id').where('t.name', 'ilike', `%${search}%`),
+        ),
+      ]),
+    )
+    .select((eb) => [
+      'o.id as id',
+      'o.createdAt as createdAt',
+      'o.customerId as customerId',
+      sql<string>`COALESCE(o.name, 'Unknown')`.as('name'),
+      sql<string>`CASE WHEN s.status IS NOT NULL THEN s.status ELSE NULL END`.as('subscriptionStatus'),
+      eb
+        .selectFrom('Team as t')
+        .whereRef('t.organisationId', '=', 'o.id')
+        .select(sql<number>`count(t.id)`.as('count'))
+        .as('teamCount'),
+      eb
+        .selectFrom('OrganisationMember as om')
+        .whereRef('om.organisationId', '=', 'o.id')
+        .select(sql<number>`count(om.id)`.as('count'))
+        .as('memberCount'),
+      eb
+        .selectFrom('Envelope as e')
+        .innerJoin('Team as t', 't.id', 'e.teamId')
+        .whereRef('t.organisationId', '=', 'o.id')
+        .where('e.status', '=', sql.lit(DocumentStatus.COMPLETED))
+        .where('e.deletedAt', 'is', null)
+        .where('e.type', '=', sql.lit(EnvelopeType.DOCUMENT))
+        .where(dateCondition)
+        .select(sql<number>`count(e.id)`.as('count'))
+        .as('signingVolume'),
+    ]);
+
+  switch (sortBy) {
+    case 'name':
+      findQuery = findQuery.orderBy('name', sortOrder);
+      break;
+    case 'createdAt':
+      findQuery = findQuery.orderBy('createdAt', sortOrder);
+      break;
+    case 'signingVolume':
+      findQuery = findQuery.orderBy('signingVolume', sortOrder);
+      break;
+    default:
+      findQuery = findQuery.orderBy('signingVolume', 'desc');
+  }
+
+  findQuery = findQuery.limit(perPage).offset(offset);
+
+  const countQuery = kyselyPrisma.$kysely
+    .selectFrom('Organisation as o')
+    .where((eb) =>
+      eb.or([
+        eb('o.name', 'ilike', `%${search}%`),
+        eb.exists(
+          eb.selectFrom('Team as t').whereRef('t.organisationId', '=', 'o.id').where('t.name', 'ilike', `%${search}%`),
+        ),
+      ]),
+    )
+    .select(({ fn }) => [fn.countAll().as('count')]);
+
+  const [results, [{ count }]] = await Promise.all([findQuery.execute(), countQuery.execute()]);
+
+  return {
+    organisations: results,
+    totalPages: Math.ceil(Number(count) / perPage),
+  };
+}

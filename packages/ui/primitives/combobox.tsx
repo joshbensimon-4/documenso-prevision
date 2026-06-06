@@ -1,9 +1,8 @@
-import * as React from 'react';
-
 import { msg } from '@lingui/core/macro';
 import { useLingui } from '@lingui/react';
 import { Trans } from '@lingui/react/macro';
 import { Check, ChevronDown } from 'lucide-react';
+import * as React from 'react';
 
 import { cn } from '../lib/utils';
 import { Button } from './button';
@@ -15,8 +14,10 @@ type ComboboxProps = {
   options: string[];
   value: string | null;
   onChange: (_value: string | null) => void;
+  triggerPlaceholder?: string;
   placeholder?: string;
   disabled?: boolean;
+  testId?: string;
 };
 
 const Combobox = ({
@@ -25,7 +26,9 @@ const Combobox = ({
   value,
   onChange,
   disabled = false,
+  triggerPlaceholder,
   placeholder,
+  testId,
 }: ComboboxProps) => {
   const { _ } = useLingui();
 
@@ -47,13 +50,14 @@ const Combobox = ({
           aria-expanded={open}
           className={cn('my-2 w-full justify-between', className)}
           disabled={disabled}
+          data-testid={testId}
         >
-          {value ? value : placeholderValue}
+          {value ? value : triggerPlaceholder || placeholderValue}
           <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
 
-      <PopoverContent className="p-0" side="bottom" align="start">
+      <PopoverContent className="z-[1001] p-0" side="bottom" align="start">
         <Command>
           <CommandInput placeholder={value || placeholderValue} />
 
@@ -64,9 +68,7 @@ const Combobox = ({
           <CommandGroup className="max-h-[250px] overflow-y-auto">
             {options.map((option, index) => (
               <CommandItem key={index} onSelect={() => onOptionSelected(option)}>
-                <Check
-                  className={cn('mr-2 h-4 w-4', option === value ? 'opacity-100' : 'opacity-0')}
-                />
+                <Check className={cn('mr-2 h-4 w-4', option === value ? 'opacity-100' : 'opacity-0')} />
 
                 {option}
               </CommandItem>

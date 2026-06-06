@@ -1,27 +1,28 @@
-import { createElement } from 'react';
-
-import { msg } from '@lingui/core/macro';
-
 import { mailer } from '@documenso/email/mailer';
 import { DocumentPendingEmailTemplate } from '@documenso/email/templates/document-pending';
 import { prisma } from '@documenso/prisma';
+import { msg } from '@lingui/core/macro';
+import { EnvelopeType } from '@prisma/client';
+import { createElement } from 'react';
 
 import { getI18nInstance } from '../../client-only/providers/i18n-server';
 import { NEXT_PUBLIC_WEBAPP_URL } from '../../constants/app';
 import { extractDerivedDocumentEmailSettings } from '../../types/document-email';
-import { env } from '../../utils/env';
+import type { EnvelopeIdOptions } from '../../utils/envelope';
+import { unsafeBuildEnvelopeIdQuery } from '../../utils/envelope';
+import { isRecipientEmailValidForSending } from '../../utils/recipients';
 import { renderEmailWithI18N } from '../../utils/render-email-with-i18n';
-import { teamGlobalSettingsToBranding } from '../../utils/team-global-settings-to-branding';
+import { getEmailContext } from '../email/get-email-context';
 
 export interface SendPendingEmailOptions {
-  documentId: number;
+  id: EnvelopeIdOptions;
   recipientId: number;
 }
 
-export const sendPendingEmail = async ({ documentId, recipientId }: SendPendingEmailOptions) => {
-  const document = await prisma.document.findFirst({
+export const sendPendingEmail = async ({ id, recipientId }: SendPendingEmailOptions) => {
+  const envelope = await prisma.envelope.findFirst({
     where: {
-      id: documentId,
+      ...unsafeBuildEnvelopeIdQuery(id, EnvelopeType.DOCUMENT),
       recipients: {
         some: {
           id: recipientId,
@@ -35,65 +36,66 @@ export const sendPendingEmail = async ({ documentId, recipientId }: SendPendingE
         },
       },
       documentMeta: true,
-      team: {
-        include: {
-          teamGlobalSettings: true,
-        },
-      },
     },
   });
 
-  if (!document) {
+  if (!envelope) {
     throw new Error('Document not found');
   }
 
-  if (document.recipients.length === 0) {
+  if (envelope.recipients.length === 0) {
     throw new Error('Document has no recipients');
   }
 
-  const isDocumentPendingEmailEnabled = extractDerivedDocumentEmailSettings(
-    document.documentMeta,
-  ).documentPending;
+  const { branding, emailLanguage, senderEmail, replyToEmail } = await getEmailContext({
+    emailType: 'RECIPIENT',
+    source: {
+      type: 'team',
+      teamId: envelope.teamId,
+    },
+    meta: envelope.documentMeta,
+  });
+
+  const isDocumentPendingEmailEnabled = extractDerivedDocumentEmailSettings(envelope.documentMeta).documentPending;
 
   if (!isDocumentPendingEmailEnabled) {
     return;
   }
 
-  const [recipient] = document.recipients;
+  const [recipient] = envelope.recipients;
 
   const { email, name } = recipient;
+
+  // Skip sending email if recipient has no email address
+  if (!isRecipientEmailValidForSending(recipient)) {
+    return;
+  }
 
   const assetBaseUrl = NEXT_PUBLIC_WEBAPP_URL() || 'http://localhost:3000';
 
   const template = createElement(DocumentPendingEmailTemplate, {
-    documentName: document.title,
+    documentName: envelope.title,
     assetBaseUrl,
   });
 
-  const branding = document.team?.teamGlobalSettings
-    ? teamGlobalSettingsToBranding(document.team.teamGlobalSettings)
-    : undefined;
-
   const [html, text] = await Promise.all([
-    renderEmailWithI18N(template, { lang: document.documentMeta?.language, branding }),
+    renderEmailWithI18N(template, { lang: emailLanguage, branding }),
     renderEmailWithI18N(template, {
-      lang: document.documentMeta?.language,
+      lang: emailLanguage,
       branding,
       plainText: true,
     }),
   ]);
 
-  const i18n = await getI18nInstance(document.documentMeta?.language);
+  const i18n = await getI18nInstance(emailLanguage);
 
   await mailer.sendMail({
     to: {
       address: email,
       name,
     },
-    from: {
-      name: env('NEXT_PRIVATE_SMTP_FROM_NAME') || 'Documenso',
-      address: env('NEXT_PRIVATE_SMTP_FROM_ADDRESS') || 'noreply@documenso.com',
-    },
+    from: senderEmail,
+    replyTo: replyToEmail,
     subject: i18n._(msg`Waiting for others to complete signing.`),
     html,
     text,
