@@ -27,7 +27,7 @@ import { Trans } from '@lingui/react/macro';
 import type { DocumentMeta, EnvelopeItem } from '@prisma/client';
 import { type Field, RecipientRole, SigningStatus } from '@prisma/client';
 import { LucideChevronDown, LucideChevronUp } from 'lucide-react';
-import { useEffect, useId, useLayoutEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 
 import { BrandingLogo } from '~/components/general/branding-logo';
 import PDFViewerLazy from '~/components/general/pdf-viewer/pdf-viewer-lazy';
@@ -151,7 +151,7 @@ export const EmbedSignDocumentV1ClientPage = ({
       }
 
       setHasCompletedDocument(true);
-    } catch (err) {
+    } catch {
       if (window.parent) {
         window.parent.postMessage(
           {
@@ -189,7 +189,7 @@ export const EmbedSignDocumentV1ClientPage = ({
     setHasRejectedDocument(true);
   };
 
-  useLayoutEffect(() => {
+  useEffect(() => {
     const hash = window.location.hash.slice(1);
 
     try {

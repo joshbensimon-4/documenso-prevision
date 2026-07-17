@@ -4,7 +4,7 @@ import { mapSecondaryIdToDocumentId } from '@documenso/lib/utils/envelope';
 import { dynamicActivate } from '@documenso/lib/utils/i18n';
 import { useLingui } from '@lingui/react';
 import { EnvelopeType } from '@prisma/client';
-import { useEffect, useLayoutEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { injectCss } from '~/utils/css-vars';
 
@@ -121,7 +121,7 @@ export const EmbedSignDocumentV2ClientPage = ({
     }
   };
 
-  useLayoutEffect(() => {
+  useEffect(() => {
     const hash = window.location.hash.slice(1);
 
     try {

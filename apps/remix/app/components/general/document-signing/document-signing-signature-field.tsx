@@ -15,7 +15,7 @@ import { msg } from '@lingui/core/macro';
 import { useLingui } from '@lingui/react';
 import { Trans } from '@lingui/react/macro';
 import { Loader } from 'lucide-react';
-import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRevalidator } from 'react-router';
 
 import { DocumentSigningDisclosure } from '~/components/general/document-signing/document-signing-disclosure';
@@ -26,6 +26,13 @@ import { useRequiredDocumentSigningContext } from './document-signing-provider';
 import { useDocumentSigningRecipientContext } from './document-signing-recipient-provider';
 
 type SignatureFieldState = 'empty' | 'signed-image' | 'signed-text';
+
+type LocalSignatureFieldOverride = {
+  basedOnInserted: boolean;
+  inserted: boolean;
+  signature: string | null;
+  isBase64: boolean;
+};
 
 export type DocumentSigningSignatureFieldProps = {
   field: FieldWithSignature;
@@ -74,18 +81,40 @@ export const DocumentSigningSignatureField = ({
 
   const [showSignatureModal, setShowSignatureModal] = useState(false);
   const [localSignature, setLocalSignature] = useState<string | null>(null);
+  const [localFieldOverride, setLocalFieldOverride] = useState<LocalSignatureFieldOverride | null>(null);
 
-  const state = useMemo<SignatureFieldState>(() => {
-    if (!field.inserted) {
-      return 'empty';
+  const activeLocalFieldOverride = localFieldOverride?.basedOnInserted === field.inserted ? localFieldOverride : null;
+  const isFieldInserted = activeLocalFieldOverride?.inserted ?? field.inserted;
+  const signatureImageAsBase64 = activeLocalFieldOverride
+    ? activeLocalFieldOverride.inserted && activeLocalFieldOverride.isBase64
+      ? activeLocalFieldOverride.signature
+      : null
+    : signature?.signatureImageAsBase64;
+  const typedSignature = activeLocalFieldOverride
+    ? activeLocalFieldOverride.inserted && !activeLocalFieldOverride.isBase64
+      ? activeLocalFieldOverride.signature
+      : null
+    : signature?.typedSignature;
+  const displayField = isFieldInserted === field.inserted ? field : { ...field, inserted: isFieldInserted };
+
+  let state: SignatureFieldState = 'signed-text';
+
+  if (!isFieldInserted) {
+    state = 'empty';
+  } else if (signatureImageAsBase64) {
+    state = 'signed-image';
+  }
+
+  const revalidateWithoutMaskingMutation = async () => {
+    try {
+      await revalidate();
+    } catch (err) {
+      console.warn('The signature mutation succeeded, but the signing page could not be refreshed.', err);
+      // Reload the signing frame so the parent flow receives authoritative field
+      // state even when Remix revalidation fails after the server saved it.
+      window.location.reload();
     }
-
-    if (signature?.signatureImageAsBase64) {
-      return 'signed-image';
-    }
-
-    return 'signed-text';
-  }, [field.inserted, signature?.signatureImageAsBase64]);
+  };
 
   const onPreSign = () => {
     if (!providedSignature) {
@@ -113,41 +142,52 @@ export const DocumentSigningSignatureField = ({
   };
 
   const onSign = async (authOptions?: TRecipientActionAuth, signature?: string) => {
+    const value = signature || providedSignature;
+
+    if (!value) {
+      setShowSignatureModal(true);
+      return;
+    }
+
+    const isTypedSignature = !value.startsWith('data:image');
+
+    if (isTypedSignature && typedSignatureEnabled === false) {
+      toast({
+        title: _(msg`Error`),
+        description: _(msg`Typed signatures are not allowed. Please draw your signature.`),
+        variant: 'destructive',
+      });
+
+      return;
+    }
+
+    const payload: TSignFieldWithTokenMutationSchema = {
+      token: recipient.token,
+      fieldId: field.id,
+      value,
+      isBase64: !isTypedSignature,
+      authOptions,
+    };
+
     try {
-      const value = signature || providedSignature;
-
-      if (!value) {
-        setShowSignatureModal(true);
-        return;
-      }
-
-      const isTypedSignature = !value.startsWith('data:image');
-
-      if (isTypedSignature && typedSignatureEnabled === false) {
-        toast({
-          title: _(msg`Error`),
-          description: _(msg`Typed signatures are not allowed. Please draw your signature.`),
-          variant: 'destructive',
-        });
-
-        return;
-      }
-
-      const payload: TSignFieldWithTokenMutationSchema = {
-        token: recipient.token,
-        fieldId: field.id,
-        value,
-        isBase64: !isTypedSignature,
-        authOptions,
-      };
-
       if (onSignField) {
         await onSignField(payload);
       } else {
-        await signFieldWithToken(payload);
-      }
+        try {
+          await signFieldWithToken(payload);
+        } catch (err) {
+          const error = AppError.parseError(err);
 
-      await revalidate();
+          if (error.code === AppErrorCode.UNAUTHORIZED) {
+            throw error;
+          }
+
+          // Retry once to resolve an ambiguous network failure. The server treats
+          // an identical signature retry as success when the first request already
+          // committed, so this also verifies the saved server-side state.
+          await signFieldWithToken(payload);
+        }
+      }
     } catch (err) {
       const error = AppError.parseError(err);
 
@@ -162,7 +202,18 @@ export const DocumentSigningSignatureField = ({
         description: _(msg`An error occurred while signing the document.`),
         variant: 'destructive',
       });
+
+      return;
     }
+
+    setLocalFieldOverride({
+      basedOnInserted: field.inserted,
+      inserted: true,
+      signature: value,
+      isBase64: !isTypedSignature,
+    });
+
+    await revalidateWithoutMaskingMutation();
   };
 
   const onRemove = async () => {
@@ -179,7 +230,14 @@ export const DocumentSigningSignatureField = ({
         await removeSignedFieldWithToken(payload);
       }
 
-      await revalidate();
+      setLocalFieldOverride({
+        basedOnInserted: field.inserted,
+        inserted: false,
+        signature: null,
+        isBase64: false,
+      });
+
+      await revalidateWithoutMaskingMutation();
     } catch (err) {
       console.error(err);
 
@@ -191,8 +249,8 @@ export const DocumentSigningSignatureField = ({
     }
   };
 
-  useLayoutEffect(() => {
-    if (!signatureRef.current || !containerRef.current || !signature?.typedSignature) {
+  useEffect(() => {
+    if (!signatureRef.current || !containerRef.current || !typedSignature) {
       return;
     }
 
@@ -221,11 +279,11 @@ export const DocumentSigningSignatureField = ({
     adjustTextSize();
 
     return () => resizeObserver.disconnect();
-  }, [signature?.typedSignature]);
+  }, [typedSignature]);
 
   return (
     <DocumentSigningFieldContainer
-      field={field}
+      field={displayField}
       onPreSign={onPreSign}
       onSign={onSign}
       onRemove={onRemove}
@@ -243,9 +301,9 @@ export const DocumentSigningSignatureField = ({
         </p>
       )}
 
-      {state === 'signed-image' && signature?.signatureImageAsBase64 && (
+      {state === 'signed-image' && signatureImageAsBase64 && (
         <img
-          src={signature.signatureImageAsBase64}
+          src={signatureImageAsBase64}
           alt={`Signature for ${recipient.name}`}
           className="h-full w-full object-contain"
         />
@@ -258,7 +316,7 @@ export const DocumentSigningSignatureField = ({
             className="w-full overflow-hidden break-all text-center font-signature text-muted-foreground leading-tight duration-200"
             style={{ fontSize: `${fontSize}rem` }}
           >
-            {signature?.typedSignature}
+            {typedSignature}
           </p>
         </div>
       )}

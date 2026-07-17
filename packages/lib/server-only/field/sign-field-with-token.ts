@@ -88,6 +88,7 @@ export const signFieldWithToken = async ({
         },
       },
       recipient: true,
+      signature: true,
     },
   });
 
@@ -115,7 +116,22 @@ export const signFieldWithToken = async ({
     throw new Error(`Recipient ${recipient.id} has already signed`);
   }
 
+  const isSignatureField = field.type === FieldType.SIGNATURE || field.type === FieldType.FREE_SIGNATURE;
+
   if (field.inserted) {
+    const isSameSignature = isSignatureField
+      ? isBase64
+        ? field.signature?.signatureImageAsBase64 === value
+        : field.signature?.typedSignature === value
+      : false;
+
+    // A client may lose the mutation response after the transaction committed and
+    // retry the same signature. Treat that retry as a successful confirmation so
+    // signing stays idempotent and does not surface a false error to the signer.
+    if (isSameSignature) {
+      return field;
+    }
+
     throw new Error(`Field ${fieldId} has already been inserted`);
   }
 
@@ -186,8 +202,6 @@ export const signFieldWithToken = async ({
       },
     },
   });
-
-  const isSignatureField = field.type === FieldType.SIGNATURE || field.type === FieldType.FREE_SIGNATURE;
 
   let customText = !isSignatureField ? value : undefined;
 
