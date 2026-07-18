@@ -1,3 +1,4 @@
+import { AUTH_SESSION_LIFETIME } from '@documenso/auth/server/config';
 import { prisma } from '@documenso/prisma';
 import { extractUserVerificationToken, seedTestEmail, seedUser } from '@documenso/prisma/seed/users';
 import { expect, type Page, test } from '@playwright/test';
@@ -59,7 +60,18 @@ test('[USER] can sign in using email and password', async ({ page }: { page: Pag
   await page.goto('/signin');
   await page.getByLabel('Email').fill(user.email);
   await page.getByLabel('Password', { exact: true }).fill('password');
+
+  const signInResponsePromise = page.waitForResponse((response) =>
+    response.url().endsWith('/api/auth/email-password/authorize'),
+  );
+
   await page.getByRole('button', { name: 'Sign In' }).click();
+
+  const signInResponse = await signInResponsePromise;
+  const setCookieHeader = await signInResponse.headerValue('set-cookie');
+
+  expect(setCookieHeader).toContain(`Max-Age=${AUTH_SESSION_LIFETIME / 1000}`);
+  expect(setCookieHeader).not.toContain('Expires=');
 
   await page.waitForURL(`/t/${team.url}/documents`);
   await expect(page).toHaveURL(`/t/${team.url}/documents`);
