@@ -1,6 +1,7 @@
 import { DocumentSignatureType } from '@documenso/lib/constants/document';
 import { isValidLanguageCode } from '@documenso/lib/constants/i18n';
 import { DO_NOT_INVALIDATE_QUERY_ON_MUTATION, SKIP_QUERY_BATCH_META } from '@documenso/lib/constants/trpc';
+import { AppError } from '@documenso/lib/errors/app-error';
 import type { TDocument } from '@documenso/lib/types/document';
 import { ZDocumentAccessAuthTypesSchema } from '@documenso/lib/types/document-auth';
 import { getDocumentDataUrlForPdfViewer } from '@documenso/lib/utils/envelope-download';
@@ -25,9 +26,10 @@ import { DocumentDistributionMethod, DocumentStatus } from '@prisma/client';
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { z } from 'zod';
-
 import PDFViewerLazy from '~/components/general/pdf-viewer/pdf-viewer-lazy';
 import { useCurrentTeam } from '~/providers/team';
+import { useCspNonce } from '~/utils/nonce';
+import { getDistributeErrorMessage } from '~/utils/toast-error-messages';
 
 export type DocumentEditFormProps = {
   className?: string;
@@ -41,6 +43,7 @@ const EditDocumentSteps: EditDocumentStep[] = ['settings', 'signers', 'fields', 
 export const DocumentEditForm = ({ className, initialDocument, documentRootPath }: DocumentEditFormProps) => {
   const { toast } = useToast();
   const { _ } = useLingui();
+  const cspNonce = useCspNonce();
 
   const navigate = useNavigate();
 
@@ -387,9 +390,12 @@ export const DocumentEditForm = ({ className, initialDocument, documentRootPath 
     } catch (err) {
       console.error(err);
 
+      const error = AppError.parseError(err);
+      const errorMessage = getDistributeErrorMessage(error.code);
+
       toast({
-        title: _(msg`Error`),
-        description: _(msg`An error occurred while sending the document.`),
+        title: _(errorMessage.title),
+        description: _(errorMessage.description),
         variant: 'destructive',
       });
     }
@@ -469,6 +475,7 @@ export const DocumentEditForm = ({ className, initialDocument, documentRootPath 
               onSubmit={onAddSignersFormSubmit}
               onAutoSave={onAddSignersFormAutoSave}
               isDocumentPdfLoaded={isDocumentPdfLoaded}
+              nonce={cspNonce}
             />
 
             <AddFieldsFormPartial

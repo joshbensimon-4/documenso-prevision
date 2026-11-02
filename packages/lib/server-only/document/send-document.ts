@@ -1,3 +1,4 @@
+import { materializeTspAnchorsForEnvelope } from '@documenso/ee/server-only/signing/csc/materialize-anchors';
 import { resolveExpiresAt } from '@documenso/lib/constants/envelope-expiration';
 import { DOCUMENT_AUDIT_LOG_TYPE } from '@documenso/lib/types/document-audit-logs';
 import type { ApiRequestMetadata } from '@documenso/lib/universal/extract-request-metadata';
@@ -29,6 +30,7 @@ import {
   ZRadioFieldMeta,
   ZTextFieldMeta,
 } from '../../types/field-meta';
+import { isTspEnvelope } from '../../types/signature-level';
 import { mapEnvelopeToWebhookDocumentPayload, ZWebhookDocumentSchema } from '../../types/webhook-payload';
 import { getFileServerSide } from '../../universal/upload/get-file.server';
 import { putNormalizedPdfFileServerSide } from '../../universal/upload/put-file.server';
@@ -36,6 +38,7 @@ import { isDocumentCompleted } from '../../utils/document';
 import { extractDocumentAuthMethods } from '../../utils/document-auth';
 import { type EnvelopeIdOptions, mapSecondaryIdToDocumentId } from '../../utils/envelope';
 import { toCheckboxCustomText, toRadioCustomText } from '../../utils/fields';
+import { getRecipientsInActiveSigningStep } from '../../utils/recipient-groups';
 import { getRecipientsWithMissingFields, isRecipientEmailValidForSending } from '../../utils/recipients';
 import { getEnvelopeWhereInput } from '../envelope/get-envelope-by-id';
 import { insertFormValuesInPdf } from '../pdf/insert-form-values-in-pdf';
@@ -124,22 +127,40 @@ export const sendDocument = async ({ id, userId, teamId, sendEmail, requestMetad
 
   const legacyDocumentId = mapSecondaryIdToDocumentId(envelope.secondaryId);
 
-  const signingOrder = envelope.documentMeta?.signingOrder || DocumentSigningOrder.PARALLEL;
+  let signingOrder = envelope.documentMeta?.signingOrder || DocumentSigningOrder.PARALLEL;
+
+  if (isTspEnvelope(envelope) && signingOrder === DocumentSigningOrder.PARALLEL && envelope.documentMeta) {
+    console.warn(
+      `[CSC] Coercing signingOrder=PARALLEL → SEQUENTIAL for ${envelope.signatureLevel} envelope ${envelope.id} at send time. The schema-layer guard should have caught this earlier.`,
+    );
+
+    await prisma.documentMeta.update({
+      where: {
+        id: envelope.documentMeta.id,
+      },
+      data: {
+        signingOrder: DocumentSigningOrder.SEQUENTIAL,
+      },
+    });
+
+    signingOrder = DocumentSigningOrder.SEQUENTIAL;
+
+    envelope.documentMeta.signingOrder = DocumentSigningOrder.SEQUENTIAL;
+  }
 
   let recipientsToNotify = envelope.recipients;
 
   if (signingOrder === DocumentSigningOrder.SEQUENTIAL) {
-    // Get the currently active recipient.
-    recipientsToNotify = envelope.recipients
-      .filter((r) => r.signingStatus === SigningStatus.NOT_SIGNED && r.role !== RecipientRole.CC)
-      .slice(0, 1);
+    recipientsToNotify = getRecipientsInActiveSigningStep(envelope.recipients, {
+      strictlySequential: isTspEnvelope(envelope),
+    });
   }
 
   if (envelope.envelopeItems.length === 0) {
     throw new Error('Missing envelope items');
   }
 
-  if (envelope.formValues) {
+  if (envelope.formValues && envelope.status === DocumentStatus.DRAFT) {
     await Promise.all(
       envelope.envelopeItems.map(async (envelopeItem) => {
         await injectFormValuesIntoDocument(envelope, envelopeItem);
@@ -173,7 +194,7 @@ export const sendDocument = async ({ id, userId, teamId, sendEmail, requestMetad
       .map((r) => (r.name ? `${r.name} (${r.email}, id: ${r.id})` : `${r.email} (id: ${r.id})`))
       .join(', ');
 
-    throw new AppError(AppErrorCode.INVALID_REQUEST, {
+    throw new AppError(AppErrorCode.MISSING_SIGNATURE_FIELD, {
       message: `The following recipients are missing required fields: ${missingRecipientDescriptions}. Signers must have at least one signature field.`,
     });
   }
@@ -223,6 +244,12 @@ export const sendDocument = async ({ id, userId, teamId, sendEmail, requestMetad
         fieldsToAutoInsert.push(fieldToAutoInsert);
       }
     }
+  }
+
+  if (isTspEnvelope(envelope) && envelope.status === DocumentStatus.DRAFT) {
+    await materializeTspAnchorsForEnvelope({
+      envelopeId: envelope.id,
+    });
   }
 
   const updatedEnvelope = await prisma.$transaction(async (tx) => {

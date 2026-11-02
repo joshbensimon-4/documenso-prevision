@@ -124,12 +124,17 @@ docker compose -f docker/development/compose.yml exec database \
 
 The quick start setup runs the following containers:
 
-| Container   | Purpose                          | Port  |
-| ----------- | -------------------------------- | ----- |
-| `documenso` | Main application                 | 3000  |
-| `database`  | PostgreSQL database              | 54320 |
-| `maildev`   | Local email testing server       | 2500  |
-| `minio`     | S3-compatible storage (optional) | 9000  |
+| Container   | Purpose                              | Port                          |
+| ----------- | ------------------------------------ | ----------------------------- |
+| `documenso` | Main application                     | 3000                          |
+| `database`  | PostgreSQL database                  | 54320                         |
+| `inbucket`  | Local email testing server           | 9000 (web UI), 2500 (SMTP)    |
+| `redis`     | Cache and background job queue       | 63790                         |
+| `gotenberg` | Document conversion (optional)       | 3005                          |
+
+Documents are stored in PostgreSQL by default. To use external S3-compatible storage, see [Storage Configuration](/docs/self-hosting/configuration/storage).
+
+The local email server is [Inbucket](https://www.inbucket.org/). Open its web UI at [http://localhost:9000](http://localhost:9000) to view emails Documenso sends during development. For your own deployment you can use any SMTP-compatible mailserver, such as Inbucket, [Mailpit](https://github.com/axllent/mailpit), or [Mailhog](https://github.com/mailhog/MailHog).
 
 ## Useful Commands
 

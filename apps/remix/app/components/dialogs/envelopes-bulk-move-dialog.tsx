@@ -28,7 +28,7 @@ export type EnvelopesBulkMoveDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   currentFolderId?: string;
-  onSuccess?: () => void;
+  onSuccess?: (folderId: string | null) => Promise<void> | void;
 } & Omit<DialogPrimitive.DialogProps, 'children'>;
 
 const ZBulkMoveFormSchema = z.object({
@@ -96,14 +96,18 @@ export const EnvelopesBulkMoveDialog = ({
       if (isDocument) {
         await trpcUtils.document.findDocumentsInternal.invalidate();
       } else {
-        await trpcUtils.template.findTemplates.invalidate();
+        await Promise.all([
+          trpcUtils.template.findTemplates.invalidate(),
+          trpcUtils.template.findTemplatesInternal.invalidate(),
+        ]);
       }
+
+      await onSuccess?.(data.folderId);
 
       toast({
         description: t`Selected items have been moved.`,
       });
 
-      onSuccess?.();
       onOpenChange(false);
     } catch (err) {
       const error = AppError.parseError(err);

@@ -1,6 +1,7 @@
 import { Trans } from '@lingui/react/macro';
 
 import { Column, Img, Section, Text } from '../components';
+import { getEmailAssetUrl } from '../utils/asset-url';
 import { TemplateDocumentImage } from './template-document-image';
 
 export interface TemplateDocumentRecipientSignedProps {
@@ -16,10 +17,6 @@ export const TemplateDocumentRecipientSigned = ({
   recipientEmail,
   assetBaseUrl,
 }: TemplateDocumentRecipientSignedProps) => {
-  const getAssetUrl = (path: string) => {
-    return new URL(path, assetBaseUrl).toString();
-  };
-
   const recipientReference = recipientName || recipientEmail;
 
   return (
@@ -29,20 +26,24 @@ export const TemplateDocumentRecipientSigned = ({
       <Section>
         <Section className="mb-4">
           <Column align="center">
-            <Text className="font-semibold text-[#7AC455] text-base">
-              <Img src={getAssetUrl('/static/completed.png')} className="-mt-0.5 mr-2 inline h-7 w-7 align-middle" />
+            <Text className="font-semibold text-base text-foreground">
+              <Img
+                src={getEmailAssetUrl(assetBaseUrl, 'static/completed.png')}
+                className="-mt-0.5 mr-2 inline h-7 w-7 align-middle"
+                alt=""
+              />
               <Trans>Completed</Trans>
             </Text>
           </Column>
         </Section>
 
-        <Text className="mb-0 text-center font-semibold text-lg text-primary">
+        <Text className="mb-0 text-center font-semibold text-foreground text-lg">
           <Trans>
             {recipientReference} has signed "{documentName}"
           </Trans>
         </Text>
 
-        <Text className="mx-auto mt-1 mb-6 max-w-[80%] text-center text-base text-slate-400">
+        <Text className="mx-auto mt-1 mb-6 max-w-[80%] text-center text-base text-muted-foreground">
           <Trans>{recipientReference} has completed signing the document.</Trans>
         </Text>
       </Section>

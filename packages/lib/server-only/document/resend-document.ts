@@ -1,4 +1,3 @@
-import { mailer } from '@documenso/email/mailer';
 import { DocumentInviteEmailTemplate } from '@documenso/email/templates/document-invite';
 import { resolveExpiresAt } from '@documenso/lib/constants/envelope-expiration';
 import { RECIPIENT_ROLE_TO_EMAIL_TYPE, RECIPIENT_ROLES_DESCRIPTION } from '@documenso/lib/constants/recipient-roles';
@@ -14,6 +13,7 @@ import {
   EnvelopeType,
   OrganisationType,
   RecipientRole,
+  SendStatus,
   SigningStatus,
   WebhookTriggerEvents,
 } from '@prisma/client';
@@ -27,9 +27,12 @@ import { isDocumentCompleted } from '../../utils/document';
 import type { EnvelopeIdOptions } from '../../utils/envelope';
 import { isRecipientEmailValidForSending } from '../../utils/recipients';
 import { renderEmailWithI18N } from '../../utils/render-email-with-i18n';
+import { shouldShowNewAccountWarning } from '../../utils/sender-trust';
+import { buildEnvelopeEmailHeaders } from '../email/build-envelope-email-headers';
 import { getEmailContext } from '../email/get-email-context';
 import { getEnvelopeWhereInput } from '../envelope/get-envelope-by-id';
 import { assertOrganisationRatesAndLimits } from '../rate-limit/assert-organisation-rates-and-limits';
+import { updateRecipientNextReminder } from '../recipient/update-recipient-next-reminder';
 import { assertUserNotDisabled } from '../user/assert-user-not-disabled';
 import { triggerWebhook } from '../webhooks/trigger/trigger-webhook';
 
@@ -51,6 +54,7 @@ export const resendDocument = async ({ id, userId, recipients, teamId, requestMe
       email: true,
       name: true,
       disabled: true,
+      createdAt: true,
     },
   });
 
@@ -117,7 +121,6 @@ export const resendDocument = async ({ id, userId, recipients, teamId, requestMe
     });
   }
 
-  // Refresh the expiresAt on each resent recipient.
   const expiresAt = resolveExpiresAt(envelope.documentMeta?.envelopeExpirationPeriod ?? null);
 
   const recipientsToRemind = envelope.recipients.filter(
@@ -127,7 +130,6 @@ export const resendDocument = async ({ id, userId, recipients, teamId, requestMe
       recipient.role !== RecipientRole.CC,
   );
 
-  // Extend the expiration deadline for recipients being resent.
   if (expiresAt && recipientsToRemind.length > 0) {
     await prisma.recipient.updateMany({
       where: {
@@ -142,6 +144,22 @@ export const resendDocument = async ({ id, userId, recipients, teamId, requestMe
     });
   }
 
+  // A manual resend restarts the reminder cycle from scratch, mirroring the
+  // initial send, so a recipient that hit the threshold can be reminded again.
+  const resentAt = new Date();
+
+  await Promise.all(
+    recipientsToRemind.map((recipient) =>
+      updateRecipientNextReminder({
+        recipientId: recipient.id,
+        envelopeId: envelope.id,
+        sentAt: resentAt,
+        lastReminderSentAt: null,
+        resetReminderCount: true,
+      }),
+    ),
+  );
+
   const isRecipientSigningRequestEmailEnabled = extractDerivedDocumentEmailSettings(
     envelope.documentMeta,
   ).recipientSigningRequest;
@@ -150,15 +168,30 @@ export const resendDocument = async ({ id, userId, recipients, teamId, requestMe
     return envelope;
   }
 
-  const { branding, emailLanguage, organisationType, senderEmail, replyToEmail, organisationId, claims } =
-    await getEmailContext({
-      emailType: 'RECIPIENT',
-      source: {
-        type: 'team',
-        teamId: envelope.teamId,
-      },
-      meta: envelope.documentMeta,
-    });
+  const {
+    branding,
+    emailLanguage,
+    settings,
+    organisationType,
+    senderEmail,
+    replyToEmail,
+    organisationId,
+    claims,
+    emailsDisabled,
+    emailTransport,
+  } = await getEmailContext({
+    emailType: 'RECIPIENT',
+    source: {
+      type: 'team',
+      teamId: envelope.teamId,
+    },
+    meta: envelope.documentMeta,
+  });
+
+  // Don't resend any emails if the organisation has email sending disabled.
+  if (user.disabled || emailsDisabled) {
+    return envelope;
+  }
 
   // Assert that there is enough quota to send the emails.
   await assertOrganisationRatesAndLimits({
@@ -166,6 +199,11 @@ export const resendDocument = async ({ id, userId, recipients, teamId, requestMe
     organisationClaim: claims,
     count: recipientsToRemind.length,
     type: 'email',
+  });
+
+  const isNewAccountSender = shouldShowNewAccountWarning({
+    userCreatedAt: user.createdAt,
+    organisationClaim: claims,
   });
 
   await Promise.all(
@@ -195,11 +233,16 @@ export const resendDocument = async ({ id, userId, recipients, teamId, requestMe
 
       if (organisationType === OrganisationType.ORGANISATION) {
         emailSubject = i18n._(msg`Reminder: ${envelope.team.name} invited you to ${recipientActionVerb} a document`);
-        emailMessage =
-          envelope.documentMeta.message ||
-          i18n._(
-            msg`${user.name || user.email} on behalf of "${envelope.team.name}" has invited you to ${recipientActionVerb} the document "${envelope.title}".`,
+
+        if (!emailMessage) {
+          const inviterName = user.name || user.email;
+
+          emailMessage = i18n._(
+            settings.includeSenderDetails
+              ? msg`${inviterName} on behalf of "${envelope.team.name}" has invited you to ${recipientActionVerb} the document "${envelope.title}".`
+              : msg`${envelope.team.name} has invited you to ${recipientActionVerb} the document "${envelope.title}".`,
           );
+        }
       }
 
       const customEmailTemplate = {
@@ -210,6 +253,7 @@ export const resendDocument = async ({ id, userId, recipients, teamId, requestMe
 
       const assetBaseUrl = NEXT_PUBLIC_WEBAPP_URL() || 'http://localhost:3000';
       const signDocumentLink = `${NEXT_PUBLIC_WEBAPP_URL()}/sign/${recipient.token}`;
+      const reportUrl = `${NEXT_PUBLIC_WEBAPP_URL()}/report/${recipient.token}`;
 
       const template = createElement(DocumentInviteEmailTemplate, {
         documentName: envelope.title,
@@ -225,6 +269,9 @@ export const resendDocument = async ({ id, userId, recipients, teamId, requestMe
         selfSigner,
         organisationType,
         teamName: envelope.team?.name,
+        includeSenderDetails: settings.includeSenderDetails,
+        reportUrl,
+        newAccountWarningSenderEmail: isNewAccountSender && !selfSigner ? user.email : undefined,
       });
 
       const [html, text] = await Promise.all([
@@ -241,7 +288,7 @@ export const resendDocument = async ({ id, userId, recipients, teamId, requestMe
 
       // Send email outside any transaction to avoid holding a connection
       // open during network I/O.
-      await mailer.sendMail({
+      await emailTransport.sendMail({
         to: {
           address: email,
           name,
@@ -253,6 +300,23 @@ export const resendDocument = async ({ id, userId, recipients, teamId, requestMe
           : emailSubject,
         html,
         text,
+        headers: buildEnvelopeEmailHeaders({
+          userId: envelope.userId,
+          envelopeId: envelope.id,
+          teamId: envelope.teamId,
+        }),
+      });
+
+      // Mark the recipient as sent if they were not already sent.
+      await prisma.recipient.updateMany({
+        where: {
+          id: recipient.id,
+          sendStatus: SendStatus.NOT_SENT,
+        },
+        data: {
+          sendStatus: SendStatus.SENT,
+          sentAt: new Date(),
+        },
       });
 
       await prisma.documentAuditLog.create({

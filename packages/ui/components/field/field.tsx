@@ -7,6 +7,7 @@ import { type Field, FieldType } from '@prisma/client';
 import React, { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 
+import { FIELD_ROOT_CONTAINER_CLASS_NAME } from '../../lib/field-root-container-classes';
 import type { RecipientColorStyles } from '../../lib/recipient-colors';
 import { cn } from '../../lib/utils';
 
@@ -108,8 +109,11 @@ export function FieldRootContainer({ field, children, color, className, readonly
     return null;
   }
 
-  const isTextField = field.type === FieldType.TEXT || field.type === FieldType.NAME || 
-                      field.type === FieldType.EMAIL || field.type === FieldType.NUMBER;
+  const isTextField =
+    field.type === FieldType.TEXT ||
+    field.type === FieldType.NAME ||
+    field.type === FieldType.EMAIL ||
+    field.type === FieldType.NUMBER;
 
   return (
     <FieldContainerPortal field={field}>
@@ -120,13 +124,13 @@ export function FieldRootContainer({ field, children, color, className, readonly
         data-inserted={field.inserted ? 'true' : 'false'}
         data-readonly={readonly ? 'true' : 'false'}
         className={cn(
-          'field--FieldRootContainer field-card-container dark-mode-disabled group relative z-20 flex h-full w-full items-center rounded-[2px] transition-all',
+          FIELD_ROOT_CONTAINER_CLASS_NAME,
           color?.base,
           {
             'px-2': field.type !== FieldType.SIGNATURE && field.type !== FieldType.FREE_SIGNATURE,
             'justify-center': !field.inserted,
-            'bg-white/90': !isTextField,
-            'ring-2 ring-gray-200': !isTextField,
+            // Text fields have no background or border; overrides the shared container classes.
+            'bg-transparent ring-0': isTextField,
             'ring-2 ring-orange-300': isValidating && isFieldUnsignedAndRequired(field),
           },
           className,

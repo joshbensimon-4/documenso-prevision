@@ -1,4 +1,5 @@
 import { AppError, AppErrorCode } from '@documenso/lib/errors/app-error';
+import { ZNameSchema } from '@documenso/lib/types/name';
 import { trpc } from '@documenso/trpc/react';
 import { Button } from '@documenso/ui/primitives/button';
 import {
@@ -24,7 +25,7 @@ import { useParams } from 'react-router';
 import { z } from 'zod';
 
 const ZCreateFolderFormSchema = z.object({
-  name: z.string().min(1, { message: 'Folder name is required' }),
+  name: ZNameSchema,
 });
 
 type TCreateFolderFormSchema = z.infer<typeof ZCreateFolderFormSchema>;

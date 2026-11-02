@@ -1,5 +1,6 @@
 import { DOCUMENT_AUDIT_LOG_TYPE } from '@documenso/lib/types/document-audit-logs';
 import type { TFieldMetaSchema } from '@documenso/lib/types/field-meta';
+import { FIELD_META_DEFAULT_VALUES } from '@documenso/lib/types/field-meta';
 import type { ApiRequestMetadata } from '@documenso/lib/universal/extract-request-metadata';
 import { createDocumentAuditLogData, diffFieldChanges } from '@documenso/lib/utils/document-audit-logs';
 import { prisma } from '@documenso/prisma';
@@ -9,6 +10,7 @@ import { AppError, AppErrorCode } from '../../errors/app-error';
 import type { EnvelopeIdOptions } from '../../utils/envelope';
 import { mapFieldToLegacyField } from '../../utils/fields';
 import { canRecipientFieldsBeModified } from '../../utils/recipients';
+import { assertEnvelopeMutable } from '../envelope/assert-envelope-mutable';
 import { getEnvelopeWhereInput } from '../envelope/get-envelope-by-id';
 
 export interface UpdateEnvelopeFieldsOptions {
@@ -60,6 +62,8 @@ export const updateEnvelopeFields = async ({
     });
   }
 
+  assertEnvelopeMutable(envelope);
+
   if (envelope.completedAt) {
     throw new AppError(AppErrorCode.INVALID_REQUEST, {
       message: 'Envelope already complete',
@@ -92,7 +96,12 @@ export const updateEnvelopeFields = async ({
     }
 
     const fieldType = field.type || originalField.type;
-    const fieldMetaType = field.fieldMeta?.type || originalField.fieldMeta?.type;
+    const isFieldTypeChanged = fieldType !== originalField.type;
+
+    // An omitted fieldMeta keeps the stored one, unless the field type changes.
+    const fallbackFieldMeta = isFieldTypeChanged ? FIELD_META_DEFAULT_VALUES[fieldType] : undefined;
+    const fieldMeta = field.fieldMeta ?? fallbackFieldMeta;
+    const fieldMetaType = fieldMeta?.type || originalField.fieldMeta?.type;
 
     // Not going to mess with V1 envelopes.
     if (envelope.internalVersion === 2 && fieldMetaType && fieldMetaType.toLowerCase() !== fieldType.toLowerCase()) {
@@ -109,12 +118,17 @@ export const updateEnvelopeFields = async ({
 
     return {
       originalField,
-      updateData: field,
+      updateData: {
+        ...field,
+        fieldMeta,
+      },
       recipientEmail: recipient.email,
     };
   });
 
   const updatedFields = await prisma.$transaction(async (tx) => {
+    await assertEnvelopeMutable(envelope, tx);
+
     return await Promise.all(
       fieldsToUpdate.map(async ({ originalField, updateData, recipientEmail }) => {
         const updatedField = await tx.field.update({

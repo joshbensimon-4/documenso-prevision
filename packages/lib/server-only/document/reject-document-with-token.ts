@@ -1,3 +1,11 @@
+// This is closely related to `reject-document-on-behalf-of.ts` but is intentionally
+// kept as a separate method rather than merged into one. This file focuses on
+// rejection from a recipient perspective (the recipient rejecting via their token),
+// whereas `reject-document-on-behalf-of.ts` focuses on it from an API/programmatic
+// perspective (an authenticated API user acting on behalf of a recipient).
+//
+// Code changes in one should probably be mirrored to the other, particularly in
+// relation to the jobs triggered after a rejection.
 import { jobs } from '@documenso/lib/jobs/client';
 import { prisma } from '@documenso/prisma';
 import { DocumentStatus, EnvelopeType, SigningStatus } from '@prisma/client';
@@ -9,6 +17,7 @@ import { createDocumentAuditLogData } from '../../utils/document-audit-logs';
 import type { EnvelopeIdOptions } from '../../utils/envelope';
 import { mapSecondaryIdToDocumentId, unsafeBuildEnvelopeIdQuery } from '../../utils/envelope';
 import { assertRecipientNotExpired } from '../../utils/recipients';
+import { assertSenderNotDisabled } from '../user/assert-user-not-disabled';
 
 export type RejectDocumentWithTokenOptions = {
   token: string;
@@ -37,9 +46,17 @@ export async function rejectDocumentWithToken({ token, id, reason, requestMetada
     });
   }
 
+  await assertSenderNotDisabled({ userId: envelope.userId });
+
   if (envelope.status !== DocumentStatus.PENDING) {
     throw new AppError(AppErrorCode.INVALID_REQUEST, {
       message: `Document ${envelope.id} must be pending to reject`,
+    });
+  }
+
+  if (recipient.signingStatus !== SigningStatus.NOT_SIGNED) {
+    throw new AppError(AppErrorCode.INVALID_REQUEST, {
+      message: `Recipient ${recipient.id} has already actioned this document`,
     });
   }
 

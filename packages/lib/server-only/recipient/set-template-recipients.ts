@@ -12,6 +12,9 @@ import { nanoid } from '../../universal/id';
 import { createRecipientAuthOptions } from '../../utils/document-auth';
 import { type EnvelopeIdOptions, mapSecondaryIdToTemplateId } from '../../utils/envelope';
 import { getEnvelopeWhereInput } from '../envelope/get-envelope-by-id';
+import { assertCompatibleRecipientGrouping } from '../signature-level/assert-compatible-recipient-grouping';
+import { assertCompatibleRecipientRole } from '../signature-level/assert-compatible-recipient-role';
+import { resolveReplacedRecipientSigningOrders } from './assign-omitted-recipient-signing-orders';
 
 export type SetTemplateRecipientsOptions = {
   userId: number;
@@ -60,23 +63,39 @@ export const setTemplateRecipients = async ({ userId, teamId, id, recipients }: 
     });
   }
 
-  const normalizedRecipients = recipients.map((recipient) => {
-    // Force replace any changes to the name or email of the direct recipient.
-    if (envelope.directLink && recipient.id === envelope.directLink.directTemplateRecipientId) {
-      return {
-        ...recipient,
-        email: DIRECT_TEMPLATE_RECIPIENT_EMAIL,
-        name: DIRECT_TEMPLATE_RECIPIENT_NAME,
-      };
-    }
-
-    return {
-      ...recipient,
-      email: recipient.email.toLowerCase(),
-    };
-  });
+  for (const recipient of recipients) {
+    assertCompatibleRecipientRole({
+      signatureLevel: envelope.signatureLevel,
+      role: recipient.role,
+    });
+  }
 
   const existingRecipients = envelope.recipients;
+
+  const { recipients: normalizedRecipients, requestedOrderRecipients } = resolveReplacedRecipientSigningOrders({
+    recipients: recipients.map((recipient) => {
+      // Force replace any changes to the name or email of the direct recipient.
+      if (envelope.directLink && recipient.id === envelope.directLink.directTemplateRecipientId) {
+        return {
+          ...recipient,
+          email: DIRECT_TEMPLATE_RECIPIENT_EMAIL,
+          name: DIRECT_TEMPLATE_RECIPIENT_NAME,
+        };
+      }
+
+      return {
+        ...recipient,
+        email: recipient.email.toLowerCase(),
+      };
+    }),
+    existingRecipients,
+  });
+
+  assertCompatibleRecipientGrouping({
+    signatureLevel: envelope.signatureLevel,
+    recipients: requestedOrderRecipients,
+    existingRecipients: normalizedRecipients.filter((recipient) => !requestedOrderRecipients.includes(recipient)),
+  });
 
   const removedRecipients = existingRecipients.filter(
     (existingRecipient) => !normalizedRecipients.find((recipient) => recipient.id === existingRecipient.id),
