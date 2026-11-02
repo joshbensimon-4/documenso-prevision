@@ -1,5 +1,6 @@
 import { authClient } from '@documenso/auth/client';
 import { AuthenticationErrorCode } from '@documenso/auth/server/lib/errors/error-codes';
+import { formatPath } from '@documenso/lib/constants/app';
 import { AppError, AppErrorCode } from '@documenso/lib/errors/app-error';
 import { env } from '@documenso/lib/utils/env';
 import { zEmail } from '@documenso/lib/utils/zod';
@@ -44,7 +45,7 @@ const handleFallbackErrorMessages = (code: string) => {
   return message;
 };
 
-const LOGIN_REDIRECT_PATH = '/';
+const LOGIN_REDIRECT_PATH = formatPath('/');
 
 export const ZSignInFormSchema = z.object({
   email: zEmail().min(1),
@@ -58,21 +59,30 @@ export type TSignInFormSchema = z.infer<typeof ZSignInFormSchema>;
 export type SignInFormProps = {
   className?: string;
   initialEmail?: string;
+  isEmailPasswordSigninEnabled?: boolean;
   isGoogleSSOEnabled?: boolean;
   isMicrosoftSSOEnabled?: boolean;
   isOIDCSSOEnabled?: boolean;
   oidcProviderLabel?: string;
   returnTo?: string;
+
+  hideForgotPassword?: boolean;
+
+  /** Called instead of navigating to `/unverified-account`. */
+  onUnverifiedEmail?: () => void;
 };
 
 export const SignInForm = ({
   className,
   initialEmail,
+  isEmailPasswordSigninEnabled = true,
   isGoogleSSOEnabled,
   isMicrosoftSSOEnabled,
   isOIDCSSOEnabled,
   oidcProviderLabel,
   returnTo,
+  hideForgotPassword = false,
+  onUnverifiedEmail,
 }: SignInFormProps) => {
   const { _ } = useLingui();
   const { toast } = useToast();
@@ -80,7 +90,6 @@ export const SignInForm = ({
   const navigate = useNavigate();
 
   const [isTwoFactorAuthenticationDialogOpen, setIsTwoFactorAuthenticationDialogOpen] = useState(false);
-  const [isEmbeddedRedirect, setIsEmbeddedRedirect] = useState(false);
 
   const [twoFactorAuthenticationMethod, setTwoFactorAuthenticationMethod] = useState<'totp' | 'backup'>('totp');
 
@@ -235,6 +244,12 @@ export const SignInForm = ({
       }
 
       if (error.code === AuthenticationErrorCode.UnverifiedEmail) {
+        if (onUnverifiedEmail) {
+          onUnverifiedEmail();
+
+          return;
+        }
+
         await navigate('/unverified-account');
 
         toast({
@@ -316,125 +331,133 @@ export const SignInForm = ({
     if (email) {
       form.setValue('email', email);
     }
-
-    setIsEmbeddedRedirect(params.get('embedded') === 'true');
   }, [form]);
 
   return (
     <Form {...form}>
       <form className={cn('flex w-full flex-col gap-y-4', className)} onSubmit={form.handleSubmit(onFormSubmit)}>
         <fieldset className="flex w-full flex-col gap-y-4" disabled={isSubmitting || isPasskeyLoading}>
-          <FormField
-            control={form.control}
-            name="email"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>
-                  <Trans>Email</Trans>
-                </FormLabel>
+          {isEmailPasswordSigninEnabled && (
+            <>
+              <FormField
+                control={form.control}
+                name="email"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>
+                      <Trans>Email</Trans>
+                    </FormLabel>
 
-                <FormControl>
-                  <Input type="email" {...field} />
-                </FormControl>
+                    <FormControl>
+                      <Input type="email" {...field} />
+                    </FormControl>
 
-                <FormMessage />
-              </FormItem>
-            )}
-          />
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
 
-          <FormField
-            control={form.control}
-            name="password"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>
-                  <Trans>Password</Trans>
-                </FormLabel>
+              <FormField
+                control={form.control}
+                name="password"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>
+                      <Trans>Password</Trans>
+                    </FormLabel>
 
-                <FormControl>
-                  <PasswordInput {...field} />
-                </FormControl>
+                    <FormControl>
+                      <PasswordInput {...field} />
+                    </FormControl>
 
-                <FormMessage />
+                    <FormMessage />
 
-                <p className="mt-2 text-right">
-                  <Link to="/forgot-password" className="text-muted-foreground text-sm duration-200 hover:opacity-70">
-                    <Trans>Forgot your password?</Trans>
-                  </Link>
-                </p>
-              </FormItem>
-            )}
-          />
+                    {!hideForgotPassword && (
+                      <p className="mt-2 text-right">
+                        <Link
+                          to="/forgot-password"
+                          className="text-muted-foreground text-sm duration-200 hover:opacity-70"
+                        >
+                          <Trans>Forgot your password?</Trans>
+                        </Link>
+                      </p>
+                    )}
+                  </FormItem>
+                )}
+              />
 
-          {turnstileSiteKey && !isTwoFactorAuthenticationDialogOpen && (
-            <Turnstile
-              ref={turnstileRef}
-              siteKey={turnstileSiteKey}
-              options={{
-                size: 'flexible',
-                appearance: 'always',
-              }}
-            />
+              {turnstileSiteKey && !isTwoFactorAuthenticationDialogOpen && (
+                <Turnstile
+                  ref={turnstileRef}
+                  siteKey={turnstileSiteKey}
+                  options={{
+                    size: 'flexible',
+                    appearance: 'always',
+                  }}
+                />
+              )}
+
+              <Button
+                type="submit"
+                size="lg"
+                loading={isSubmitting}
+                className="dark:bg-documenso dark:hover:opacity-90"
+              >
+                {isSubmitting ? <Trans>Signing in...</Trans> : <Trans>Sign In</Trans>}
+              </Button>
+            </>
           )}
 
-          <Button type="submit" size="lg" loading={isSubmitting} className="dark:bg-documenso dark:hover:opacity-90">
-            {isSubmitting ? <Trans>Signing in...</Trans> : <Trans>Sign In</Trans>}
-          </Button>
+          {isEmailPasswordSigninEnabled && hasSocialAuthEnabled && (
+            <div className="relative flex items-center justify-center gap-x-4 py-2 text-xs uppercase">
+              <div className="h-px flex-1 bg-border" />
+              <span className="bg-transparent text-muted-foreground">
+                <Trans>Or continue with</Trans>
+              </span>
+              <div className="h-px flex-1 bg-border" />
+            </div>
+          )}
 
-          {!isEmbeddedRedirect && (
-            <>
-              {hasSocialAuthEnabled && (
-                <div className="relative flex items-center justify-center gap-x-4 py-2 text-xs uppercase">
-                  <div className="h-px flex-1 bg-border" />
-                  <span className="bg-transparent text-muted-foreground">
-                    <Trans>Or continue with</Trans>
-                  </span>
-                  <div className="h-px flex-1 bg-border" />
-                </div>
-              )}
+          {isGoogleSSOEnabled && (
+            <Button
+              type="button"
+              size="lg"
+              variant="outline"
+              className="border bg-background text-muted-foreground"
+              disabled={isSubmitting}
+              onClick={onSignInWithGoogleClick}
+            >
+              <FcGoogle className="mr-2 h-5 w-5" />
+              Google
+            </Button>
+          )}
 
-              {isGoogleSSOEnabled && (
-                <Button
-                  type="button"
-                  size="lg"
-                  variant="outline"
-                  className="border bg-background text-muted-foreground"
-                  disabled={isSubmitting}
-                  onClick={onSignInWithGoogleClick}
-                >
-                  <FcGoogle className="mr-2 h-5 w-5" />
-                  Google
-                </Button>
-              )}
+          {isMicrosoftSSOEnabled && (
+            <Button
+              type="button"
+              size="lg"
+              variant="outline"
+              className="border bg-background text-muted-foreground"
+              disabled={isSubmitting}
+              onClick={onSignInWithMicrosoftClick}
+            >
+              <img className="mr-2 h-4 w-4" alt="Microsoft Logo" src={'/static/microsoft.svg'} />
+              Microsoft
+            </Button>
+          )}
 
-              {isMicrosoftSSOEnabled && (
-                <Button
-                  type="button"
-                  size="lg"
-                  variant="outline"
-                  className="border bg-background text-muted-foreground"
-                  disabled={isSubmitting}
-                  onClick={onSignInWithMicrosoftClick}
-                >
-                  <img className="mr-2 h-4 w-4" alt="Microsoft Logo" src={'/static/microsoft.svg'} />
-                  Microsoft
-                </Button>
-              )}
-
-              {isOIDCSSOEnabled && (
-                <Button
-                  type="button"
-                  size="lg"
-                  variant="outline"
-                  className="border bg-background text-muted-foreground"
-                  disabled={isSubmitting}
-                  onClick={onSignInWithOIDCClick}
-                >
-                  <FaIdCardClip className="mr-2 h-5 w-5" />
-                  {oidcProviderLabel || 'OIDC'}
-                </Button>
-              )}
-            </>
+          {isOIDCSSOEnabled && (
+            <Button
+              type="button"
+              size="lg"
+              variant="outline"
+              className="border bg-background text-muted-foreground"
+              disabled={isSubmitting}
+              onClick={onSignInWithOIDCClick}
+            >
+              <FaIdCardClip className="mr-2 h-5 w-5" />
+              {oidcProviderLabel || 'OIDC'}
+            </Button>
           )}
 
           <Button

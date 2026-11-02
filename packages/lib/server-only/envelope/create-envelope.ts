@@ -29,6 +29,7 @@ import type {
 import type { TDocumentFormValues } from '../../types/document-form-values';
 import type { TEnvelopeAttachmentType } from '../../types/envelope-attachment';
 import type { TFieldAndMeta } from '../../types/field-meta';
+import type { TSignatureLevel } from '../../types/signature-level';
 import { mapEnvelopeToWebhookDocumentPayload, ZWebhookDocumentSchema } from '../../types/webhook-payload';
 import { getFileServerSide } from '../../universal/upload/get-file.server';
 import { putPdfFileServerSide } from '../../universal/upload/put-file.server';
@@ -37,6 +38,10 @@ import { createDocumentAuthOptions, createRecipientAuthOptions } from '../../uti
 import { buildTeamWhereQuery } from '../../utils/teams';
 import { incrementDocumentId, incrementTemplateId } from '../envelope/increment-id';
 import { assertOrganisationRatesAndLimits } from '../rate-limit/assert-organisation-rates-and-limits';
+import { assignOmittedRecipientSigningOrders } from '../recipient/assign-omitted-recipient-signing-orders';
+import { assertCompatibleRecipientGrouping } from '../signature-level/assert-compatible-recipient-grouping';
+import { assertCompatibleRecipientRole } from '../signature-level/assert-compatible-recipient-role';
+import { resolveSignatureLevel } from '../signature-level/resolve-signature-level';
 import { getTeamSettings } from '../team/get-team-settings';
 import { assertUserNotDisabledById } from '../user/assert-user-not-disabled';
 import { triggerWebhook } from '../webhooks/trigger/trigger-webhook';
@@ -89,6 +94,7 @@ export type CreateEnvelopeOptions = {
     recipients?: CreateEnvelopeRecipientOptions[];
     folderId?: string;
     delegatedDocumentOwner?: string;
+    signatureLevel?: TSignatureLevel;
   };
   attachments?: Array<{
     label: string;
@@ -137,7 +143,13 @@ export const createEnvelope = async ({
     publicDescription,
     visibility: visibilityOverride,
     delegatedDocumentOwner,
+    signatureLevel: requestedSignatureLevel,
   } = data;
+
+  const signatureLevel = resolveSignatureLevel({
+    requested: requestedSignatureLevel,
+    strict: true,
+  });
 
   const team = await prisma.team.findFirst({
     where: buildTeamWhereQuery({ teamId, userId }),
@@ -192,6 +204,17 @@ export const createEnvelope = async ({
   if (data.envelopeItems.length !== 1 && internalVersion === 1) {
     throw new AppError(AppErrorCode.INVALID_BODY, {
       message: 'Envelope items must have exactly 1 item for version 1',
+    });
+  }
+
+  // CSC / TSP signing flows assume the V2 envelope shape: per-recipient
+  // anchors, materialised PDF lineage, sequential signing, mutation lock.
+  // The legacy V1 (Document) model can't carry that state, so AES/QES on V1
+  // is structurally unsupported and must fail at create time — not later at
+  // sign or seal time when the cause is harder to attribute.
+  if (signatureLevel !== 'SES' && internalVersion === 1) {
+    throw new AppError(AppErrorCode.INVALID_BODY, {
+      message: `Envelopes signed at '${signatureLevel}' require internalVersion=2; the legacy V1 envelope shape cannot host TSP signing.`,
     });
   }
 
@@ -255,6 +278,27 @@ export const createEnvelope = async ({
     });
   }
 
+  for (const recipient of data.recipients ?? []) {
+    assertCompatibleRecipientRole({ signatureLevel, role: recipient.role });
+  }
+
+  const parsedDefaultRecipients =
+    settings.defaultRecipients && !bypassDefaultRecipients
+      ? ZDefaultRecipientsSchema.parse(settings.defaultRecipients)
+      : [];
+
+  const defaultRecipients: CreateEnvelopeRecipientOptions[] = parsedDefaultRecipients.map((recipient) => ({
+    email: recipient.email,
+    name: recipient.name,
+    role: recipient.role,
+  }));
+
+  const requestedRecipients = [...(data.recipients ?? []), ...defaultRecipients];
+
+  assertCompatibleRecipientGrouping({ signatureLevel, recipients: requestedRecipients });
+
+  const recipientsToCreate = assignOmittedRecipientSigningOrders({ recipients: requestedRecipients });
+
   const visibility = visibilityOverride || settings.documentVisibility;
 
   const emailId = meta?.emailId;
@@ -311,10 +355,14 @@ export const createEnvelope = async ({
 
   const [documentMeta, secondaryId, delegatedOwner] = await Promise.all([
     prisma.documentMeta.create({
-      data: extractDerivedDocumentMeta(settings, {
-        ...meta,
-        timezone: timezoneToUse,
-      }),
+      data: extractDerivedDocumentMeta(
+        settings,
+        {
+          ...meta,
+          timezone: timezoneToUse,
+        },
+        signatureLevel,
+      ),
     }),
     type === EnvelopeType.DOCUMENT
       ? incrementDocumentId().then((v) => v.formattedDocumentId)
@@ -331,6 +379,7 @@ export const createEnvelope = async ({
         internalVersion,
         type,
         title,
+        signatureLevel,
         qrToken: prefixedId('qr'),
         externalId,
         envelopeItems: {
@@ -373,21 +422,8 @@ export const createEnvelope = async ({
 
     const firstEnvelopeItem = envelope.envelopeItems[0];
 
-    const defaultRecipients =
-      settings.defaultRecipients && !bypassDefaultRecipients
-        ? ZDefaultRecipientsSchema.parse(settings.defaultRecipients)
-        : [];
-
-    const mappedDefaultRecipients: CreateEnvelopeRecipientOptions[] = defaultRecipients.map((recipient) => ({
-      email: recipient.email,
-      name: recipient.name,
-      role: recipient.role,
-    }));
-
-    const allRecipients = [...(data.recipients || []), ...mappedDefaultRecipients];
-
     await Promise.all(
-      allRecipients.map(async (recipient) => {
+      recipientsToCreate.map(async (recipient) => {
         const recipientAuthOptions = createRecipientAuthOptions({
           accessAuth: recipient.accessAuth ?? [],
           actionAuth: recipient.actionAuth ?? [],

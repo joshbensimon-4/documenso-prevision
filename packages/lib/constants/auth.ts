@@ -1,24 +1,9 @@
 import MailChecker from 'mailchecker';
-import { z } from 'zod';
 
 import { env } from '../utils/env';
 import { NEXT_PUBLIC_WEBAPP_URL } from './app';
 
 export const SALT_ROUNDS = 12;
-
-export const URL_PATTERN = /https?:\/\/|www\./i;
-
-/**
- * Shared name schema that disallows URLs to prevent phishing via email rendering.
- */
-export const ZNameSchema = z
-  .string()
-  .trim()
-  .min(3, { message: 'Please enter a valid name.' })
-  .max(255, { message: 'Name cannot be more than 255 characters.' })
-  .refine((value) => !URL_PATTERN.test(value), {
-    message: 'Name cannot contain URLs.',
-  });
 
 export const IDENTITY_PROVIDER_NAME: Record<string, string> = {
   DOCUMENSO: 'Documenso',
@@ -40,6 +25,14 @@ export const IS_OIDC_SSO_ENABLED = Boolean(
 );
 
 export const OIDC_PROVIDER_LABEL = env('NEXT_PRIVATE_OIDC_PROVIDER_LABEL');
+
+/**
+ * Opt-out flag for the automatic OIDC redirect.
+ *
+ * When OIDC is the only enabled signin transport we redirect to the provider
+ * automatically. Set this to "true" to keep rendering the signin page instead.
+ */
+export const IS_OIDC_AUTO_REDIRECT_DISABLED = env('NEXT_PUBLIC_DISABLE_OIDC_AUTO_REDIRECT') === 'true';
 
 export const USER_SECURITY_AUDIT_LOG_MAP: Record<string, string> = {
   ACCOUNT_SSO_LINK: 'Linked account to SSO',
@@ -72,12 +65,14 @@ export const PASSKEY_TIMEOUT = 60000;
  */
 export const MAXIMUM_PASSKEYS = 50;
 
-export const useSecureCookies =
-  env('NODE_ENV') === 'production' && String(NEXT_PUBLIC_WEBAPP_URL()).startsWith('https://');
+// Keyed off the scheme only: browsers reject `Secure`/`Partitioned`/`__Host-`
+// over plain http (Safari even on localhost), including local https dev.
+export const shouldUseSecureCookies = () => String(NEXT_PUBLIC_WEBAPP_URL()).startsWith('https://');
 
-const secureCookiePrefix = useSecureCookies ? '__Secure-' : '';
+export const formatSecureCookieName = (name: string) => (shouldUseSecureCookies() ? `__Secure-${name}` : name);
 
-export const formatSecureCookieName = (name: string) => `${secureCookiePrefix}${name}`;
+// `__Host-` requires `Secure`, `Path=/` and no `Domain`, so a subdomain cannot set it.
+export const formatHostCookieName = (name: string) => (shouldUseSecureCookies() ? `__Host-${name}` : name);
 
 export const getCookieDomain = () => {
   const url = new URL(NEXT_PUBLIC_WEBAPP_URL());
@@ -184,6 +179,29 @@ export const isSignupEnabledForProvider = (provider: 'email' | 'google' | 'micro
     google: 'NEXT_PUBLIC_DISABLE_GOOGLE_SIGNUP',
     microsoft: 'NEXT_PUBLIC_DISABLE_MICROSOFT_SIGNUP',
     oidc: 'NEXT_PUBLIC_DISABLE_OIDC_SIGNUP',
+  } as const;
+
+  return env(flagMap[provider]) !== 'true';
+};
+
+export const isSigninDisabledGlobally = (): boolean => {
+  return env('NEXT_PUBLIC_DISABLE_SIGNIN') === 'true';
+};
+
+/**
+ * Check if signin is enabled for the given provider.
+ * The master switch takes precedence over the per-provider flags.
+ */
+export const isSigninEnabledForProvider = (provider: 'email' | 'google' | 'microsoft' | 'oidc'): boolean => {
+  if (isSigninDisabledGlobally()) {
+    return false;
+  }
+
+  const flagMap = {
+    email: 'NEXT_PUBLIC_DISABLE_EMAIL_PASSWORD_SIGNIN',
+    google: 'NEXT_PUBLIC_DISABLE_GOOGLE_SIGNIN',
+    microsoft: 'NEXT_PUBLIC_DISABLE_MICROSOFT_SIGNIN',
+    oidc: 'NEXT_PUBLIC_DISABLE_OIDC_SIGNIN',
   } as const;
 
   return env(flagMap[provider]) !== 'true';

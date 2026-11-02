@@ -1,15 +1,19 @@
-import { useDebouncedValue } from '@documenso/lib/client-only/hooks/use-debounced-value';
 import { currentMonthlyPeriod } from '@documenso/lib/universal/monthly-period';
 import { trpc } from '@documenso/trpc/react';
 import { Alert, AlertDescription } from '@documenso/ui/primitives/alert';
 import { Input } from '@documenso/ui/primitives/input';
+import { RadioGroup, RadioGroupItem } from '@documenso/ui/primitives/radio-group';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@documenso/ui/primitives/select';
 import { Trans, useLingui } from '@lingui/react/macro';
-import { useEffect, useMemo, useState } from 'react';
-import { useLocation, useSearchParams } from 'react-router';
+import { debounce, parseAsInteger, parseAsString, useQueryStates } from 'nuqs';
+import { useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router';
 
 import { SettingsHeader } from '~/components/general/settings-header';
-import { AdminOrganisationStatsTable } from '~/components/tables/admin-organisation-stats-table';
+import {
+  AdminOrganisationStatsTable,
+  type OrganisationStatsDisplayMode,
+} from '~/components/tables/admin-organisation-stats-table';
 
 const ALL_CLAIMS_VALUE = 'all';
 
@@ -48,11 +52,16 @@ export default function OrganisationStats() {
   const { t } = useLingui();
 
   const [searchParams, setSearchParams] = useSearchParams();
-  const { pathname } = useLocation();
 
-  const [searchQuery, setSearchQuery] = useState(() => searchParams?.get('query') ?? '');
+  const [{ query: searchQuery }, setSearchFilters] = useQueryStates(
+    {
+      query: parseAsString.withDefault(''),
+      page: parseAsInteger,
+    },
+    { shallow: false, limitUrlUpdates: debounce(500) },
+  );
 
-  const debouncedSearchQuery = useDebouncedValue(searchQuery, 500);
+  const [displayMode, setDisplayMode] = useState<OrganisationStatsDisplayMode>('usage');
 
   const periodOptions = useMemo(() => generatePeriodOptions(), []);
 
@@ -65,29 +74,12 @@ export default function OrganisationStats() {
 
   const claimOptions = claimsData?.data ?? [];
 
-  /**
-   * Handle debouncing the search query.
-   */
-  useEffect(() => {
-    const params = new URLSearchParams(searchParams?.toString());
-
-    params.set('query', debouncedSearchQuery);
-
-    if (debouncedSearchQuery === '') {
-      params.delete('query');
-    }
-
-    if ((searchParams?.get('query') || '') !== debouncedSearchQuery) {
-      params.delete('page');
-    }
-
-    // If nothing to change then do nothing.
-    if (params.toString() === searchParams?.toString()) {
-      return;
-    }
-
-    setSearchParams(params);
-  }, [debouncedSearchQuery, pathname, searchParams]);
+  const onSearchQueryChange = (value: string) => {
+    void setSearchFilters({
+      query: value || null,
+      page: null,
+    });
+  };
 
   const onPeriodChange = (value: string) => {
     const params = new URLSearchParams(searchParams?.toString());
@@ -122,8 +114,8 @@ export default function OrganisationStats() {
 
       <div className="mt-4 flex flex-col gap-4 sm:flex-row">
         <Input
-          defaultValue={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
+          value={searchQuery}
+          onChange={(e) => onSearchQueryChange(e.target.value)}
           placeholder={t`Search by organisation name, URL or ID`}
           className="flex-1"
         />
@@ -157,8 +149,37 @@ export default function OrganisationStats() {
       </div>
 
       <div className="mt-4">
-        <AdminOrganisationStatsTable />
+        <AdminOrganisationStatsTable displayMode={displayMode} />
       </div>
+
+      <RadioGroup
+        value={displayMode}
+        onValueChange={(value) =>
+          setDisplayMode(value === 'quotas' ? 'quotas' : value === 'averages' ? 'averages' : 'usage')
+        }
+        className="mt-4 flex flex-col gap-3 rounded-lg border border-border p-4"
+      >
+        <div className="flex items-center gap-2">
+          <RadioGroupItem id="display-usage" value="usage" />
+          <label htmlFor="display-usage" className="text-muted-foreground text-sm">
+            <Trans>Show usage</Trans>
+          </label>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <RadioGroupItem id="display-quotas" value="quotas" />
+          <label htmlFor="display-quotas" className="text-muted-foreground text-sm">
+            <Trans>Show usage with quotas</Trans>
+          </label>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <RadioGroupItem id="display-averages" value="averages" />
+          <label htmlFor="display-averages" className="text-muted-foreground text-sm">
+            <Trans>Show daily averages for documents, emails and API usages</Trans>
+          </label>
+        </div>
+      </RadioGroup>
 
       <Alert variant="neutral" className="mt-4">
         <AlertDescription>

@@ -1,7 +1,14 @@
 import signingCelebration from '@documenso/assets/images/signing-celebration.png';
 import { getOptionalSession } from '@documenso/auth/server/lib/utils/get-session';
+import {
+  expiredCscBlockingErrorCookieHeader,
+  readCscBlockingErrorFromRequest,
+} from '@documenso/ee/server-only/signing/csc/cookies/blocking-error-cookie';
+import { readCscSadSessionFromRequest } from '@documenso/ee/server-only/signing/csc/cookies/sad-session-cookie';
+import { readCscServiceSessionFromRequest } from '@documenso/ee/server-only/signing/csc/cookies/service-session-cookie';
 import { EnvelopeRenderProvider } from '@documenso/lib/client-only/providers/envelope-render-provider';
 import { useOptionalSession } from '@documenso/lib/client-only/providers/session';
+import { IS_INSTANCE_CSC_MODE } from '@documenso/lib/constants/app';
 import { AppError, AppErrorCode } from '@documenso/lib/errors/app-error';
 import { loadRecipientBrandingByTeamId } from '@documenso/lib/server-only/branding/load-recipient-branding';
 import { getDocumentAndSenderByToken } from '@documenso/lib/server-only/document/get-document-by-token';
@@ -16,8 +23,10 @@ import { getRecipientByToken } from '@documenso/lib/server-only/recipient/get-re
 import { getRecipientSignatures } from '@documenso/lib/server-only/recipient/get-recipient-signatures';
 import { getRecipientsForAssistant } from '@documenso/lib/server-only/recipient/get-recipients-for-assistant';
 import { getTeamSettings } from '@documenso/lib/server-only/team/get-team-settings';
+import { assertSenderNotDisabled } from '@documenso/lib/server-only/user/assert-user-not-disabled';
 import { getUserByEmail } from '@documenso/lib/server-only/user/get-user-by-email';
 import { DocumentAccessAuth } from '@documenso/lib/types/document-auth';
+import { isTspEnvelope } from '@documenso/lib/types/signature-level';
 import { extractDocumentAuthMethods } from '@documenso/lib/utils/document-auth';
 import { isRecipientExpired } from '@documenso/lib/utils/recipients';
 import { prisma } from '@documenso/prisma';
@@ -30,11 +39,14 @@ import { getOptionalLoaderContext } from 'server/utils/get-loader-session';
 import { match } from 'ts-pattern';
 
 import { Header as AuthenticatedHeader } from '~/components/general/app-header';
+import { CscRecipientBlockedPage } from '~/components/general/document-signing/csc-recipient-blocked-page';
+import { CscRecipientSigningInProgressPage } from '~/components/general/document-signing/csc-recipient-signing-in-progress-page';
 import { DocumentSigningAuthPageView } from '~/components/general/document-signing/document-signing-auth-page';
 import { DocumentSigningAuthProvider } from '~/components/general/document-signing/document-signing-auth-provider';
 import { DocumentSigningPageViewV1 } from '~/components/general/document-signing/document-signing-page-view-v1';
 import { DocumentSigningPageViewV2 } from '~/components/general/document-signing/document-signing-page-view-v2';
 import { DocumentSigningProvider } from '~/components/general/document-signing/document-signing-provider';
+import { DocumentSigningSenderDisabledPage } from '~/components/general/document-signing/document-signing-sender-disabled-page';
 import { EnvelopeSigningProvider } from '~/components/general/document-signing/envelope-signing-provider';
 import { RecipientBranding } from '~/components/general/recipient-branding';
 import { useCspNonce } from '~/utils/nonce';
@@ -83,22 +95,23 @@ const handleV1Loader = async ({ params, request }: Route.LoaderArgs) => {
         })
       : [recipient];
 
-  if (
-    document.documentMeta?.signingOrder === DocumentSigningOrder.SEQUENTIAL &&
-    recipient.role !== RecipientRole.ASSISTANT
-  ) {
-    const nextPendingRecipient = await getNextPendingRecipient({
-      documentId: document.id,
-      currentRecipientId: recipient.id,
-    });
+  // Dictation eligibility must be decided here, over the FULL recipient list
+  // — the same computation the completion route enforces. `allRecipients` is
+  // role-scoped (assistants only see strictly later steps, not their own
+  // group peers), so deriving it client-side from that list would offer
+  // dictation the server then silently ignores.
+  const nextPendingRecipient =
+    document.documentMeta?.signingOrder === DocumentSigningOrder.SEQUENTIAL
+      ? await getNextPendingRecipient({
+          documentId: document.id,
+          currentRecipientId: recipient.id,
+        })
+      : null;
 
-    if (nextPendingRecipient) {
-      allRecipients.push({
-        ...nextPendingRecipient,
-        fields: [],
-      });
-    }
-  }
+  // Only the identity is needed client-side (dictation flag + prefill).
+  const nextRecipient = nextPendingRecipient
+    ? { name: nextPendingRecipient.name, email: nextPendingRecipient.email }
+    : null;
 
   const { derivedRecipientAccessAuth } = extractDocumentAuthMethods({
     documentAuth: document.authOptions,
@@ -160,10 +173,15 @@ const handleV1Loader = async ({ params, request }: Route.LoaderArgs) => {
     recipient,
     recipientWithFields,
     allRecipients,
+    nextRecipient,
     completedFields,
     recipientSignature,
     isRecipientsTurn,
     includeSenderDetails: settings.includeSenderDetails,
+    branding: {
+      brandingEnabled: settings.brandingEnabled,
+      brandingLogo: settings.brandingLogo,
+    },
   } as const;
 };
 
@@ -253,6 +271,58 @@ const handleV2Loader = async ({ params, request }: Route.LoaderArgs) => {
     recipientAccessAuth: derivedRecipientAccessAuth,
   }).catch(() => null);
 
+  // CSC / TSP routing. TSP envelopes have three terminal recipient-page
+  // states beyond the normal signing UI:
+  //   1. `blocked` — service-scope OAuth returned a hard error (set by the
+  //      callback as a one-shot `csc_blocking_error` cookie).
+  //   2. `signing-in-progress` — credential-scope OAuth completed, SAD is
+  //      attached server-side, page auto-fires the sync sign mutation.
+  //   3. pre-auth — no service token yet, kick the recipient into
+  //      service-scope OAuth.
+  // The fourth state (service session valid, no SAD, no blocking error) falls
+  // through to the normal signing UI.
+  if (IS_INSTANCE_CSC_MODE() && isTspEnvelope(envelope)) {
+    const blockingError = await readCscBlockingErrorFromRequest(request);
+
+    if (blockingError && blockingError.recipientToken === token) {
+      return {
+        isDocumentAccessValid: true,
+        envelopeForSigning,
+        csc: { state: 'blocked', code: blockingError.code } as const,
+        responseHeaders: { 'Set-Cookie': expiredCscBlockingErrorCookieHeader() },
+      } as const;
+    }
+
+    const sadSessionId = await readCscSadSessionFromRequest(request);
+
+    if (sadSessionId) {
+      const cscSession = await prisma.cscSession.findUnique({
+        where: { id: sadSessionId },
+      });
+
+      const isSadSessionValid =
+        cscSession !== null &&
+        cscSession.recipientId === recipient.id &&
+        cscSession.encryptedSad !== null &&
+        cscSession.sadExpiresAt !== null &&
+        cscSession.sadExpiresAt > new Date();
+
+      if (isSadSessionValid) {
+        return {
+          isDocumentAccessValid: true,
+          envelopeForSigning,
+          csc: { state: 'signing-in-progress', sessionId: sadSessionId } as const,
+        } as const;
+      }
+    }
+
+    const serviceSessionToken = await readCscServiceSessionFromRequest(request);
+
+    if (serviceSessionToken !== token) {
+      throw redirect(`/api/csc/oauth/authorize?scope=service&token=${encodeURIComponent(token)}`);
+    }
+  }
+
   return {
     isDocumentAccessValid: true,
     envelopeForSigning,
@@ -276,6 +346,7 @@ export async function loader(loaderArgs: Route.LoaderArgs) {
         select: {
           internalVersion: true,
           teamId: true,
+          userId: true,
         },
       },
     },
@@ -285,6 +356,19 @@ export async function loader(loaderArgs: Route.LoaderArgs) {
     throw new Response('Not Found', { status: 404 });
   }
 
+  // Resolved here rather than via the token fetchers so branding is never loaded for a disabled sender.
+  try {
+    await assertSenderNotDisabled({ userId: foundRecipient.envelope.userId });
+  } catch (e) {
+    if (AppError.parseError(e).code === AppErrorCode.SENDER_DISABLED) {
+      return superLoaderJson({
+        isSenderDisabled: true,
+      } as const);
+    }
+
+    throw e;
+  }
+
   const branding = await loadRecipientBrandingByTeamId({
     teamId: foundRecipient.envelope.teamId,
   });
@@ -292,16 +376,29 @@ export async function loader(loaderArgs: Route.LoaderArgs) {
   if (foundRecipient.envelope.internalVersion === 2) {
     const payloadV2 = await handleV2Loader(loaderArgs);
 
-    return superLoaderJson({
-      version: 2,
-      payload: payloadV2,
-      branding,
-    } as const);
+    // V2 payload may carry a one-shot `Set-Cookie` header (used to clear the
+    // CSC blocking-error cookie after the loader reads it). Forward it via
+    // the `superLoaderJson` response init so the browser actually applies the
+    // header. The field stays on the payload — it's just a `Max-Age=0` clear
+    // directive, not sensitive — and isn't read by any consumer.
+    const responseHeaders =
+      'responseHeaders' in payloadV2 && payloadV2.responseHeaders ? payloadV2.responseHeaders : undefined;
+
+    return superLoaderJson(
+      {
+        isSenderDisabled: false,
+        version: 2,
+        payload: payloadV2,
+        branding,
+      } as const,
+      responseHeaders ? { headers: responseHeaders } : undefined,
+    );
   }
 
   const payloadV1 = await handleV1Loader(loaderArgs);
 
   return superLoaderJson({
+    isSenderDisabled: false,
     version: 1,
     payload: payloadV1,
     branding,
@@ -311,6 +408,10 @@ export async function loader(loaderArgs: Route.LoaderArgs) {
 export default function SigningPage() {
   const data = useSuperLoaderData<typeof loader>();
   const cspNonce = useCspNonce();
+
+  if (data.isSenderDisabled) {
+    return <DocumentSigningSenderDisabledPage />;
+  }
 
   return (
     <>
@@ -337,7 +438,9 @@ const SigningPageV1 = ({ data }: { data: Awaited<ReturnType<typeof handleV1Loade
     recipientSignature,
     isRecipientsTurn,
     allRecipients,
+    nextRecipient,
     includeSenderDetails,
+    branding,
     recipientWithFields,
   } = data;
 
@@ -360,8 +463,7 @@ const SigningPageV1 = ({ data }: { data: Awaited<ReturnType<typeof handleV1Loade
 
           <h2 className="mt-6 max-w-[35ch] text-center font-semibold text-2xl leading-normal md:text-3xl lg:text-4xl">
             <Trans>
-              <span className="mt-1.5 block">"{document.title}"</span>
-              is no longer available to sign
+              <span className="mt-1.5 block">"{document.title}"</span> is no longer available to sign
             </Trans>
           </h2>
 
@@ -409,7 +511,9 @@ const SigningPageV1 = ({ data }: { data: Awaited<ReturnType<typeof handleV1Loade
             completedFields={completedFields}
             isRecipientsTurn={isRecipientsTurn}
             allRecipients={allRecipients}
+            nextRecipient={nextRecipient ?? undefined}
             includeSenderDetails={includeSenderDetails}
+            branding={branding}
           />
         </div>
       </DocumentSigningAuthProvider>
@@ -423,6 +527,19 @@ const SigningPageV2 = ({ data }: { data: Awaited<ReturnType<typeof handleV2Loade
 
   if (!data.isDocumentAccessValid) {
     return <DocumentSigningAuthPageView email={data.recipientEmail} emailHasAccount={!!data.recipientHasAccount} />;
+  }
+
+  if ('csc' in data && data.csc?.state === 'blocked') {
+    return <CscRecipientBlockedPage code={data.csc.code} recipientToken={data.envelopeForSigning.recipient.token} />;
+  }
+
+  if ('csc' in data && data.csc?.state === 'signing-in-progress') {
+    return (
+      <CscRecipientSigningInProgressPage
+        sessionId={data.csc.sessionId}
+        recipientToken={data.envelopeForSigning.recipient.token}
+      />
+    );
   }
 
   const { envelope, recipientSignature, recipient } = data.envelopeForSigning;
@@ -446,8 +563,7 @@ const SigningPageV2 = ({ data }: { data: Awaited<ReturnType<typeof handleV2Loade
 
           <h2 className="mt-6 max-w-[35ch] text-center font-semibold text-2xl leading-normal md:text-3xl lg:text-4xl">
             <Trans>
-              <span className="mt-1.5 block">"{envelope.title}"</span>
-              is no longer available to sign
+              <span className="mt-1.5 block">"{envelope.title}"</span> is no longer available to sign
             </Trans>
           </h2>
 
